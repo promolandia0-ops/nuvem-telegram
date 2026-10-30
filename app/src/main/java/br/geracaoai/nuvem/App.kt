@@ -17,5 +17,6 @@ class App : Application() {
             NotificationChannel(Backup.CHANNEL, "Backup", NotificationManager.IMPORTANCE_LOW))
         Td.init(this)
         Backup.schedule(this)
+        br.geracaoai.nuvem.work.WatchedSync.schedule(this)
     }
 }

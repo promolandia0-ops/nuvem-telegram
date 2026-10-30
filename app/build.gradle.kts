@@ -4,13 +4,13 @@ val ks = Properties().apply { val f = rootProject.file("keystore/keystore.proper
 android {
   namespace = "br.geracaoai.nuvem"
   compileSdk = 35
-  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 1; versionName = "1.0.0"
+  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 2; versionName = "1.1.0"
     ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } }
   signingConfigs { create("release") { if (ks.isNotEmpty()) { storeFile = rootProject.file(ks["storeFile"] as String); storePassword = ks["storePassword"] as String; keyAlias = ks["keyAlias"] as String; keyPassword = ks["keyPassword"] as String } } }
   buildTypes { release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); signingConfig = signingConfigs.getByName("release") } }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
   kotlinOptions { jvmTarget = "17" }
-  buildFeatures { compose = true; buildConfig = true }
+  buildFeatures { compose = true; buildConfig = true; aidl = true }
   packaging { jniLibs { useLegacyPackaging = false } }
   lint { checkReleaseBuilds = false; abortOnError = false }
 }
@@ -29,6 +29,9 @@ dependencies {
   implementation("io.coil-kt:coil-compose:2.7.0")
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
   implementation("io.github.tdlib-android:core:0.1.1")
+  implementation("dev.rikka.shizuku:api:13.1.5")
+  implementation("dev.rikka.shizuku:provider:13.1.5")
+  implementation("androidx.documentfile:documentfile:1.0.1")
   testImplementation("junit:junit:4.13.2")
   testImplementation("org.json:json:20240303")
 }

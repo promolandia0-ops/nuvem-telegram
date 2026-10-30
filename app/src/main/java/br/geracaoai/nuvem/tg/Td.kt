@@ -66,7 +66,7 @@ object Td {
             useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
             apiId = id; apiHash = hash
             systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.0"
+            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.1"
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }
@@ -85,6 +85,9 @@ object Td {
         val d = sends.getOrPut(tempId) { CompletableDeferred() }
         try { return d.await() } finally { sends.remove(tempId) }
     }
+
+    /** Mensagens que ainda estão sendo enviadas (id temporário). */
+    fun pendingSends(): List<Long> = sends.keys.toList()
 
     suspend fun awaitReady(timeoutMs: Long = 30_000): Boolean =
         withTimeoutOrNull(timeoutMs) { auth.first { it is TdApi.AuthorizationStateReady } } != null

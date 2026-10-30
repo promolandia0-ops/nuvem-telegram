@@ -65,7 +65,7 @@ fun MainShell(onLogout: () -> Unit) {
     Box {
         Scaffold(bottomBar = {
             NavigationBar {
-                listOf(Triple("Fotos", Icons.Rounded.Photo, 0), Triple("Álbuns", Icons.Rounded.PhotoLibrary, 1),
+                listOf(Triple("Fotos", Icons.Rounded.Photo, 0), Triple("Álbuns", Icons.Rounded.PhotoLibrary, 1), Triple("Assistidos", Icons.Rounded.OndemandVideo, 4),
                     Triple("Backup", Icons.Rounded.CloudUpload, 2), Triple("Ajustes", Icons.Rounded.Settings, 3)).forEach { (l, i, n) ->
                     NavigationBarItem(tab == n, { tab = n }, { Icon(i, null) }, label = { Text(l) })
                 }
@@ -76,6 +76,7 @@ fun MainShell(onLogout: () -> Unit) {
                     0 -> GalleryScreen(null) { l, i -> viewer = l to i }
                     1 -> AlbumsScreen { l, i -> viewer = l to i }
                     2 -> BackupScreen()
+                    4 -> WatchedScreen()
                     else -> SettingsScreen(onLogout)
                 }
             }

@@ -10,6 +10,10 @@ import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.tg.TdException
 import java.io.File
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import java.util.concurrent.TimeUnit
 
 object Backup {
@@ -23,13 +27,37 @@ object Backup {
 
     fun schedule(c: Context) {
         val wm = WorkManager.getInstance(c)
-        if (!Prefs.autoBackup) { wm.cancelUniqueWork(PERIODIC); return }
+        if (!Prefs.autoBackup || Prefs2.backupPaused) { wm.cancelUniqueWork(PERIODIC); return }
         wm.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE,
             PeriodicWorkRequestBuilder<BackupWorker>(1, TimeUnit.HOURS).setConstraints(constraints())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES).build())
     }
 
+    /** Botão "Parar": pausa de verdade. Cancela os workers (a corrotina recebe CancellationException e
+     *  o upload em andamento é abortado no TDLib) e não recomeça até o usuário tocar em "Retomar". */
+    fun stop(c: Context) {
+        Prefs2.backupPaused = true
+        val wm = WorkManager.getInstance(c)
+        wm.cancelUniqueWork(NOW); wm.cancelUniqueWork(PERIODIC)
+        cancelPendingUploads()
+    }
+
+    fun resume(c: Context) { Prefs2.backupPaused = false; schedule(c); runNow(c, true) }
+
+    /** Rede de segurança: aborta qualquer envio pendente no TDLib (mesmo se o worker já tiver morrido). */
+    fun cancelPendingUploads() {
+        val chat = Prefs.chatId; if (chat == 0L) return
+        val ids = Td.pendingSends(); if (ids.isEmpty()) return
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            for (id in ids) try {
+                val m = Td.send(org.drinkless.tdlib.TdApi.GetMessage(chat, id))
+                Repo.cancelSending(chat, id, Repo.docOf(m)?.document?.id ?: -1)
+            } catch (_: Exception) {}
+        }
+    }
+
     fun runNow(c: Context, ignoreConstraints: Boolean = false) {
+        if (Prefs2.backupPaused) return
         val b = OneTimeWorkRequestBuilder<BackupWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
         b.setConstraints(if (ignoreConstraints) Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build() else constraints())
         WorkManager.getInstance(c).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, b.build())
@@ -46,7 +74,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     override suspend fun doWork(): Result {
         Td.init(applicationContext)
-        if (Prefs.chatId == 0L || Prefs.folders.isEmpty()) return Result.success()
+        if (Prefs.chatId == 0L || Prefs.folders.isEmpty() || Prefs2.backupPaused) return Result.success()
         if (!Td.awaitReady()) return Result.retry()
         try { setForeground(getForegroundInfo()) } catch (_: Exception) {}
         return try {
@@ -57,7 +85,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             var done = 0; var sent = 0
             val total = todo.size
             for (i in todo) {
-                if (isStopped) break
+                if (isStopped || Prefs2.backupPaused) break
+                coroutineContext.ensureActive()
                 val h = Repo.localHash(i)
                 if (Db.cloudByHash(chat, h)?.size != i.size) {
                     var last = -1
@@ -72,11 +101,14 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 done++
                 setProgress(workDataOf("done" to done, "total" to total, "name" to i.name, "pct" to 100))
             }
+            if (isStopped || Prefs2.backupPaused) return Result.success()
             Prefs.lastBackup = System.currentTimeMillis(); Prefs.lastError = ""
             Result.success(workDataOf("sent" to sent))
+        } catch (e: CancellationException) { throw e
         } catch (e: TdException) {
+            if (isStopped || Prefs2.backupPaused) return Result.success()
             Prefs.lastError = e.message ?: "erro"
             if (e.code == 429 || e.code >= 500 || e.code == 0) Result.retry() else Result.failure()
-        } catch (e: Exception) { Prefs.lastError = e.message ?: "erro"; Result.retry() }
+        } catch (e: Exception) { if (isStopped || Prefs2.backupPaused) return Result.success(); Prefs.lastError = e.message ?: "erro"; Result.retry() }
     }
 }

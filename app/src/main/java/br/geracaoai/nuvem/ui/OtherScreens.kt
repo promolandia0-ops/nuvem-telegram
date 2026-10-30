@@ -66,7 +66,9 @@ fun BackupScreen() {
     val wm = WorkManager.getInstance(ctx)
     val now by wm.getWorkInfosForUniqueWorkFlow(Backup.NOW).collectAsStateWithLifecycle(emptyList())
     val per by wm.getWorkInfosForUniqueWorkFlow(Backup.PERIODIC).collectAsStateWithLifecycle(emptyList())
-    val running = (now + per).firstOrNull { it.state == WorkInfo.State.RUNNING }
+    var paused by remember { mutableStateOf(Prefs2.backupPaused) }
+    // Ao pausar, a UI para na hora (não espera o WorkManager confirmar o cancelamento).
+    val running = if (paused) null else (now + per).firstOrNull { it.state == WorkInfo.State.RUNNING }
     var buckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
     var sel by remember { mutableStateOf(Prefs.folders) }
     var auto by remember { mutableStateOf(Prefs.autoBackup) }
@@ -81,7 +83,7 @@ fun BackupScreen() {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (running != null) Icons.Rounded.CloudSync else Icons.Rounded.CloudDone, null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(12.dp))
-                        Text(if (running != null) "Fazendo backup…" else "Backup", style = MaterialTheme.typography.titleLarge)
+                        Text(if (running != null) "Fazendo backup…" else if (paused) "Backup pausado" else "Backup", style = MaterialTheme.typography.titleLarge)
                     }
                     Spacer(Modifier.height(8.dp))
                     AnimatedContent(running, label = "prog") { r ->
@@ -93,14 +95,16 @@ fun BackupScreen() {
                                 Spacer(Modifier.height(4.dp)); LinearProgressIndicator({ p / 100f }, Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.tertiary)
                             }
                         } else Text(buildString {
+                            if (paused) append("Parado por você. Nada será enviado até tocar em Retomar.\n")
                             append(if (Prefs.lastBackup > 0) "Último backup: " + SimpleDateFormat("dd/MM HH:mm", Locale("pt", "BR")).format(Date(Prefs.lastBackup)) else "Nenhum backup ainda")
                             if (Prefs.lastError.isNotBlank()) append("\nÚltimo erro: ${traduz(Prefs.lastError)}")
                         }, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button({ save(); Backup.runNow(ctx, true) }, enabled = running == null && sel.isNotEmpty()) { Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(6.dp)); Text("Fazer backup agora") }
-                        if (running != null) OutlinedButton({ wm.cancelUniqueWork(Backup.NOW) }) { Text("Parar") }
+                        if (paused) Button({ paused = false; save(); Backup.resume(ctx) }, enabled = sel.isNotEmpty()) { Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Retomar") }
+                        else Button({ save(); Backup.runNow(ctx, true) }, enabled = running == null && sel.isNotEmpty()) { Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(6.dp)); Text("Fazer backup agora") }
+                        if (running != null) OutlinedButton({ paused = true; Backup.stop(ctx) }) { Icon(Icons.Rounded.Stop, null); Spacer(Modifier.width(6.dp)); Text("Parar") }
                     }
                 }
             }
@@ -145,7 +149,7 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
             modifier = Modifier.clickable { Prefs.chatId = 0; onLogout() }) }
         item { ListItem(headlineContent = { Text("Sair da conta") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.0 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+        item { Text("Nuvem 1.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
     }
     if (confirmOut) AlertDialog({ confirmOut = false }, title = { Text("Sair da conta?") }, text = { Text("Seus arquivos continuam no Telegram. O backup automático para até você entrar de novo.") },
         confirmButton = { Button({ confirmOut = false; scope.launch { try { Td.send(TdApi.LogOut()) } catch (_: Exception) {}; Prefs.chatId = 0; onLogout() } }) { Text("Sair") } },

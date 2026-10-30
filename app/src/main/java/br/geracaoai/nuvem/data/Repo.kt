@@ -80,25 +80,44 @@ object Repo {
     suspend fun upload(c: Context, i: LocalItem, hash: String, onProgress: (Float) -> Unit): TdApi.Message {
         val meta = Meta(hash, i.size, i.taken, i.name, i.mime, i.bucket, i.relPath + i.name)
         val thumb = thumbFor(c, i)
+        try { return uploadFile(i.path, i.size, meta.toCaption(), thumb, onProgress) } finally { thumb?.delete() }
+    }
+
+    /** Envio genérico. Se a corrotina for cancelada (botão Parar), cancela o envio no TDLib e apaga a mensagem pendente. */
+    suspend fun uploadFile(path: String, size: Long, caption: String, thumb: File?, onProgress: (Float) -> Unit): TdApi.Message {
+        val chat = Prefs.chatId
         val content = TdApi.InputMessageDocument().apply {
             document = TdApi.InputDocument().apply {
-                document = TdApi.InputFileLocal(i.path)
+                document = TdApi.InputFileLocal(path)
                 thumbnail = thumb?.let { TdApi.InputThumbnail().apply { this.thumbnail = TdApi.InputFileLocal(it.absolutePath); width = 320; height = 320 } }
                 disableContentTypeDetection = true
             }
-            caption = TdApi.FormattedText(meta.toCaption(), emptyArray())
+            this.caption = TdApi.FormattedText(caption, emptyArray())
         }
-        val tmp = Td.send(TdApi.SendMessage().apply { chatId = Prefs.chatId; inputMessageContent = content; options = TdApi.MessageSendOptions().apply { disableNotification = true } })
+        val tmp = Td.send(TdApi.SendMessage().apply { chatId = chat; inputMessageContent = content; options = TdApi.MessageSendOptions().apply { disableNotification = true } })
         val fileId = docOf(tmp)?.document?.id ?: -1
         val job = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
             Td.fileUpdates.collect { f -> if (f.id == fileId && f.expectedSize > 0) onProgress(f.remote.uploadedSize.toFloat() / f.expectedSize) }
         }
-        val res = try { Td.awaitSend(tmp.id) } finally { job.cancel(); thumb?.delete() }
+        val res = try { Td.awaitSend(tmp.id) }
+        catch (e: kotlinx.coroutines.CancellationException) {
+            withContext(kotlinx.coroutines.NonCancellable) { cancelSending(chat, tmp.id, fileId) }
+            throw e
+        } finally { job.cancel() }
         val msg = res.message ?: throw TdException(res.error?.code ?: 0, res.error?.message ?: "Falha no envio")
         val d = docOf(msg) ?: throw TdException(0, "Mensagem sem documento")
-        if (d.document.size != i.size || !d.document.remote.isUploadingCompleted) throw TdException(0, "Verificação de tamanho falhou")
+        if (d.document.size != size || !d.document.remote.isUploadingCompleted) throw TdException(0, "Verificação de tamanho falhou")
         toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
         return msg
+    }
+
+    /** Apagar a mensagem pendente faz o TDLib abortar o upload; depois libera o arquivo parcial. */
+    suspend fun cancelSending(chat: Long, tmpMsgId: Long, fileId: Int) {
+        try { Td.send(TdApi.DeleteMessages(chat, longArrayOf(tmpMsgId), true)) } catch (_: Exception) {}
+        if (fileId > 0) {
+            try { Td.send(TdApi.CancelPreliminaryUploadFile(fileId)) } catch (_: Exception) {}
+            try { Td.send(TdApi.CancelDownloadFile(fileId, false)) } catch (_: Exception) {}
+        }
     }
 
     // ---------- Liberar espaço ----------

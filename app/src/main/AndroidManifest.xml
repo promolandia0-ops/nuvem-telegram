@@ -11,11 +11,20 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <queries>
+    <intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="video/*"/></intent>
+    <package android:name="moe.shizuku.privileged.api"/>
+  </queries>
   <application android:name=".App" android:label="Nuvem" android:icon="@drawable/ic_launcher" android:roundIcon="@drawable/ic_launcher"
       android:theme="@style/Theme.Nuvem" android:allowBackup="false" android:largeHeap="true">
     <activity android:name=".ui.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
     </activity>
+    <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="${applicationId}.shizuku" android:multiprocess="false"
+        android:enabled="true" android:exported="true" android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"/>
+    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
+    </provider>
     <service android:name="androidx.work.impl.foreground.SystemForegroundService" android:foregroundServiceType="dataSync" tools:node="merge"/>
   </application>
 </manifest>

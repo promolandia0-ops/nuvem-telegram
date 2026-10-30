@@ -11,19 +11,24 @@ data class CloudItem(
     val taken: Long, val folder: String, val path: String, val hash: String, val mini: ByteArray?,
 ) { val isVideo get() = mime.startsWith("video/") }
 
+const val WATCHED_FOLDER = "Assistidos no Telegram"
+
 object Db {
     private lateinit var h: SQLiteOpenHelper
     /** Incrementa sempre que o índice da nuvem muda (a UI observa). */
     val version = MutableStateFlow(0)
 
     fun init(c: Context) {
-        h = object : SQLiteOpenHelper(c, "nuvem.db", null, 1) {
+        h = object : SQLiteOpenHelper(c, "nuvem.db", null, 2) {
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL("CREATE TABLE cloud(msg_id INTEGER, chat_id INTEGER, name TEXT, mime TEXT, size INTEGER, taken INTEGER, folder TEXT, path TEXT, hash TEXT, mini BLOB, PRIMARY KEY(chat_id,msg_id))")
                 db.execSQL("CREATE INDEX cloud_hash ON cloud(hash)")
                 db.execSQL("CREATE TABLE local_ok(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, hash TEXT)")
+                onUpgrade(db, 1, 2)
             }
-            override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {}
+            override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
+                if (o < 2) db.execSQL("CREATE TABLE IF NOT EXISTS watched_seen(k TEXT PRIMARY KEY, at INTEGER)")
+            }
         }
     }
     private val db get() = h.writableDatabase
@@ -40,7 +45,13 @@ object Db {
     fun hasMsg(chatId: Long, msgId: Long) = db.rawQuery("SELECT 1 FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { it.moveToFirst() }
 
     fun cloudByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=?", arrayOf("$chatId", hash)).firstOrNull()
-    fun allCloud(chatId: Long): List<CloudItem> = query("chat_id=?", arrayOf("$chatId"))
+    /** Galeria normal (sem os vídeos assistidos no Telegram). */
+    fun allCloud(chatId: Long): List<CloudItem> = query("chat_id=? AND folder<>?", arrayOf("$chatId", WATCHED_FOLDER))
+    fun watchedCloud(chatId: Long): List<CloudItem> = query("chat_id=? AND folder=?", arrayOf("$chatId", WATCHED_FOLDER))
+
+    /** Vídeos do cache do Telegram já processados (chave nome+tamanho). Fica mesmo após apagar da nuvem, para não reenviar. */
+    fun seen(k: String) = db.rawQuery("SELECT 1 FROM watched_seen WHERE k=?", arrayOf(k)).use { it.moveToFirst() }
+    fun markSeen(k: String) { db.insertWithOnConflict("watched_seen", null, ContentValues().apply { put("k", k); put("at", System.currentTimeMillis()) }, SQLiteDatabase.CONFLICT_REPLACE) }
 
     private fun query(where: String, args: Array<String>): List<CloudItem> =
         db.query("cloud", null, where, args, null, null, "taken DESC, msg_id DESC").use { c ->
