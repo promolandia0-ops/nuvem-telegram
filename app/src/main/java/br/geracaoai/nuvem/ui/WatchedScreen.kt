@@ -52,6 +52,9 @@ fun WatchedScreen() {
     LaunchedEffect(ver) { items = withContext(Dispatchers.IO) { Db.watchedCloud(Prefs.chatId) } }
     var shiz by remember { mutableStateOf(Shiz.state()) }
     var tree by remember { mutableStateOf(Prefs2.watchedTree) }
+    var safOk by remember { mutableStateOf(SafAccess.granted(ctx)) }
+    var safTry by remember { mutableStateOf(Prefs.raw.getInt("saf_try", 0)) }
+    var safErr by remember { mutableStateOf<String?>(null) }
     var paused by remember { mutableStateOf(Prefs2.watchedPaused) }
     DisposableEffect(Unit) {
         val l = Shizuku.OnRequestPermissionResultListener { _, _ -> shiz = Shiz.state(); WatchedSync.runNow(ctx, true) }
@@ -59,13 +62,16 @@ fun WatchedScreen() {
         Shizuku.addRequestPermissionResultListener(l); Shizuku.addBinderReceivedListenerSticky(b)
         onDispose { Shizuku.removeRequestPermissionResultListener(l); Shizuku.removeBinderReceivedListener(b) }
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { shiz = Shiz.state(); WatchedSync.runNow(ctx) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { shiz = Shiz.state(); safOk = SafAccess.granted(ctx); WatchedSync.runNow(ctx) }
     val now by wm.getWorkInfosForUniqueWorkFlow(WatchedSync.NOW).collectAsStateWithLifecycle(emptyList())
     val per by wm.getWorkInfosForUniqueWorkFlow(WatchedSync.PERIODIC).collectAsStateWithLifecycle(emptyList())
     val running = if (paused) null else (now + per).firstOrNull { it.state == WorkInfo.State.RUNNING }
-    val pickTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { u ->
-        if (u != null) { ctx.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            Prefs2.watchedTree = u.toString(); tree = u.toString(); WatchedSync.runNow(ctx, true) }
+    val pickTree = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val u = r.data?.data
+        if (u == null) { safErr = "Você saiu sem liberar. Toque de novo e escolha \"Usar esta pasta\" → \"Permitir\"." }
+        else { val e = SafAccess.accept(ctx, u); tree = Prefs2.watchedTree
+            if (e == null) { safOk = true; safErr = null; WatchedSync.runNow(ctx, true) } else safErr = e }
+        if (!safOk) { safTry++; Prefs.raw.edit().putInt("saf_try", safTry).apply() }
     }
     var selected by remember { mutableStateOf(setOf<Long>()) }
     var confirmDel by remember { mutableStateOf(false) }
@@ -124,9 +130,11 @@ fun WatchedScreen() {
                     }
                 }
             }
-            if (shiz != ShizState.READY) item(span = { GridItemSpan(maxLineSpan) }, key = "shiz") {
-                ShizukuCard(shiz, tree.isNotBlank(), onGrant = { Shiz.requestPermission() }, onPickTree = {
-                    pickTree.launch(Uri.parse("content://com.android.externalstorage.documents/document/primary%3ATelegram")) })
+            if (!safOk && shiz != ShizState.READY) item(span = { GridItemSpan(maxLineSpan) }, key = "saf") {
+                SafCard(safTry, safErr) { try { pickTree.launch(SafAccess.intent(safTry)) } catch (e: Exception) { safErr = "Seletor de pastas indisponível: ${e.message}" } }
+            }
+            if (!safOk && shiz != ShizState.READY && (safTry > 0 || shiz == ShizState.NO_PERMISSION)) item(span = { GridItemSpan(maxLineSpan) }, key = "shiz") {
+                ShizukuCard(shiz, tree.isNotBlank(), onGrant = { Shiz.requestPermission() }, onPickTree = { try { pickTree.launch(SafAccess.intent(safTry)) } catch (_: Exception) {} })
             }
             if (items.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
@@ -169,17 +177,33 @@ fun WatchedScreen() {
 }
 
 @Composable
+private fun SafCard(attempt: Int, err: String?, onGrant: () -> Unit) {
+    ElevatedCard(Modifier.fillMaxWidth().padding(4.dp), colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(Modifier.padding(20.dp)) {
+            Text("Falta só um passo", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text("Para copiar os vídeos que você assiste, o Nuvem precisa ler a pasta do Telegram. É uma vez só.\n\nNa próxima tela, toque em \"Usar esta pasta\" → \"Permitir\".",
+                style = MaterialTheme.typography.bodyMedium)
+            err?.let { Spacer(Modifier.height(8.dp)); Text(it + if (attempt > 0) "\nToque de novo: vou tentar outro modo (${attempt % SafAccess.candidates().size + 1}/${SafAccess.candidates().size})." else "",
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Spacer(Modifier.height(14.dp))
+            Button(onGrant, Modifier.fillMaxWidth().height(56.dp)) { Icon(Icons.Rounded.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Liberar pasta do Telegram", style = MaterialTheme.typography.titleMedium) }
+        }
+    }
+}
+
+@Composable
 private fun ShizukuCard(state: ShizState, hasTree: Boolean, onGrant: () -> Unit, onPickTree: () -> Unit) {
     val ctx = LocalContext.current
     OutlinedCard(Modifier.fillMaxWidth().padding(4.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Key, null, tint = MaterialTheme.colorScheme.tertiary); Spacer(Modifier.width(12.dp))
-                Text(if (state == ShizState.NO_PERMISSION) "Falta permitir o Shizuku" else "Ative o Shizuku para pegar tudo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(if (state == ShizState.NO_PERMISSION) "Falta permitir o Shizuku" else "Plano B (opcional): Shizuku", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.height(8.dp))
             Text(if (state == ShizState.NO_PERMISSION) "O Shizuku está ligado. Toque em Permitir para o Nuvem ler o cache do Telegram."
-                else "O Android esconde o cache do Telegram (pasta Android/data). Sem o Shizuku, o Nuvem só vê os vídeos da pasta pública \"Telegram\".\n\n" +
+                else "Só se o botão acima não funcionar no seu celular. Sem nenhum dos dois, o Nuvem só vê os vídeos da pasta pública \"Telegram\".\n\n" +
                     "1. Instale o Shizuku (Play Store).\n2. Ative Opções do desenvolvedor → Depuração por Wi‑Fi.\n3. No Shizuku, toque em \"Iniciar\" (via depuração sem fio) e pareie.\n4. Volte aqui e toque em Permitir.\n\nApós reiniciar o celular, abra o Shizuku e toque em Iniciar de novo.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(12.dp))
@@ -188,7 +212,7 @@ private fun ShizukuCard(state: ShizState, hasTree: Boolean, onGrant: () -> Unit,
                 else Button({ val i = ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
                     ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api"))
                     ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }) { Text("Abrir Shizuku") }
-                OutlinedButton(onPickTree) { Text(if (hasTree) "Pasta Telegram ✓" else "Usar pasta Telegram") }
+                OutlinedButton(onPickTree) { Text("Tentar a pasta de novo") }
             }
         }
     }

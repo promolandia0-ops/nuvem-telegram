@@ -62,7 +62,7 @@ object Watched {
                 }
             } catch (_: Exception) {}
         }
-        Prefs2.watchedTree.takeIf { it.isNotBlank() }?.let { t -> try { walkTree(c, Uri.parse(t)).forEach { out.putIfAbsent(it.key, it) } } catch (_: Exception) {} }
+        for (t in (SafAccess.trees(c) + listOfNotNull(Prefs2.watchedTree.takeIf { it.isNotBlank() }?.let(Uri::parse))).distinct()) try { walkTree(c, t).forEach { out.putIfAbsent(it.key, it) } } catch (_: Exception) {}
         // Pastas públicas do Telegram indexadas pelo Android (sem Shizuku, via permissão de vídeos).
         try {
             c.contentResolver.query(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL),
@@ -78,15 +78,22 @@ object Watched {
     private fun walkTree(c: Context, tree: Uri): List<WatchedFile> {
         val out = ArrayList<WatchedFile>()
         fun walk(docId: String, depth: Int) {
-            if (depth > 6) return
+            if (depth > 8) return
             val kids = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
             c.contentResolver.query(kids, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                 DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { k ->
-                while (k.moveToNext()) {
-                    val id = k.getString(0); val name = k.getString(1) ?: ""
-                    if (k.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) { if (!name.equals("Stickers", true)) walk(id, depth + 1) }
-                    else if (k.getLong(3) >= MIN_SIZE) out += WatchedFile("saf", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString(), name, k.getLong(3), k.getLong(4))
+                val rows = ArrayList<Array<Any?>>()
+                while (k.moveToNext()) rows += arrayOf(k.getString(0), k.getString(1) ?: "", k.getString(2), k.getLong(3), k.getLong(4))
+                // Se a árvore é Android/data inteira, entra só nas pastas do Telegram.
+                val tgOnly = rows.any { (it[1] as String) in PKGS }
+                for (r in rows) {
+                    val id = r[0] as String; val name = r[1] as String
+                    if (r[2] == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        if (tgOnly && name !in PKGS) continue
+                        if (!name.equals("Stickers", true) && !name.equals("emoji", true)) walk(id, depth + 1) }
+                    else if ((r[3] as Long) >= MIN_SIZE) out += WatchedFile("saf", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString(), name, r[3] as Long, r[4] as Long)
                 }
+                return@use
             }
         }
         walk(DocumentsContract.getTreeDocumentId(tree), 0)
