@@ -60,7 +60,8 @@ object Backup {
         if (Prefs2.backupPaused) return
         val b = OneTimeWorkRequestBuilder<BackupWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
         b.setConstraints(if (ignoreConstraints) Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build() else constraints())
-        WorkManager.getInstance(c).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, b.build())
+        // REPLACE no manual pra não ficar preso num worker antigo que travou.
+        WorkManager.getInstance(c).enqueueUniqueWork(NOW, if (ignoreConstraints) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, b.build())
     }
 }
 
@@ -78,15 +79,25 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         if (!Td.awaitReady()) return Result.retry()
         try { setForeground(getForegroundInfo()) } catch (_: Exception) {}
         return try {
-            Repo.syncIndex()
+            fun report(d: Int, total: Int, name: String, pct: Int) {
+                setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct, "err" to (Prefs.lastError)))
+                setForegroundAsync(ForegroundInfo(42, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            }
+            report(0, 0, "Preparando o canal…", 0)
+            Repo.ensureDestination()
+            report(0, 0, "Sincronizando o canal…", 0)
+            Repo.syncIndex { page -> report(0, 0, "Sincronizando o canal… página $page", 0) }
             val chat = Prefs.chatId
+            if (chat == 0L) throw TdException(0, "Não foi possível criar ou abrir o canal Nuvem.")
             val max = Meta.maxSize(Td.isPremium.value)
+            report(0, 0, "Lendo a galeria…", 0)
             val todo = LocalMedia.all(applicationContext, Prefs.folders).filter { it.size in 1..max && File(it.path).canRead() }
             var done = 0; var sent = 0
             val total = todo.size
-            fun report(d: Int, name: String, pct: Int) {
-                setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct))
-                setForegroundAsync(ForegroundInfo(42, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            if (total == 0) {
+                Prefs.lastError = if (Prefs.folders.isEmpty()) "Nenhuma pasta selecionada." else "Nenhum arquivo acessível nas pastas escolhidas. Confira a permissão de fotos e vídeos."
+                Prefs.lastBackup = System.currentTimeMillis()
+                return Result.success()
             }
             val albums = todo.groupBy { it.bucket }.toList().sortedByDescending { it.second.maxOf { i -> i.taken } }
             album@ for ((album, albumItems) in albums) {
@@ -94,20 +105,21 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 val pending = ArrayList<Pair<LocalItem, String>>()
                 for (i in albumItems.sortedBy { it.taken }) {
                     if (isStopped || Prefs2.backupPaused) break@album
+                    report(done + pending.size, total, "Verificando ${album.ifBlank { "álbum" }} • ${i.name}", 0)
                     val h = Repo.localHash(i)
                     val existing = Db.visibleByHash(chat, h) ?: Db.cloudByHash(chat, h)
                     if (existing?.size == i.size) {
                         if (Prefs.originalPhotos && Db.originalByHash(chat, h) == null) {
                             try {
-                                val m = Td.send(org.drinkless.tdlib.TdApi.GetMessage(chat, existing.msgId))
+                                val m = Td.send(org.drinkless.tdlib.TdApi.GetMessage(chat, existing.msgId), 20_000)
                                 var last = -1
                                 Repo.uploadOriginalIfNeeded(applicationContext, i, h, m) { p ->
                                     val pct = (p * 100).toInt()
-                                    if (pct != last) { last = pct; report(done, "${album.ifBlank { "Álbum" }} • ${i.name}", pct) }
+                                    if (pct != last) { last = pct; report(done, total, "${album.ifBlank { "Álbum" }} • ${i.name}", pct) }
                                 }
                             } catch (_: Exception) {}
                         }
-                        done++; report(done, i.name, 100); continue
+                        done++; report(done, total, i.name, 100); continue
                     }
                     pending += i to h
                 }
@@ -119,10 +131,10 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                     Repo.uploadGroup(applicationContext, chunk) { idx, p ->
                         val name = "${album.ifBlank { "Álbum" }} • ${chunk[idx].first.name}"
                         val pct = (p * 100).toInt()
-                        if (pct != last) { last = pct; report(done + idx, name, pct) }
+                        if (pct != last) { last = pct; report(done + idx, total, name, pct) }
                     }
                     sent += chunk.size; done += chunk.size
-                    report(done, chunk.last().first.name, 100)
+                    report(done, total, chunk.last().first.name, 100)
                 }
                 if (!isStopped && !Prefs2.backupPaused) try { Repo.sendAlbumMarker(album) } catch (_: Exception) {}
             }
@@ -133,7 +145,13 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         } catch (e: TdException) {
             if (isStopped || Prefs2.backupPaused) return Result.success()
             Prefs.lastError = e.message ?: "erro"
-            if (e.code == 429 || e.code >= 500 || e.code == 0) Result.retry() else Result.failure()
-        } catch (e: Exception) { if (isStopped || Prefs2.backupPaused) return Result.success(); Prefs.lastError = e.message ?: "erro"; Result.retry() }
+            try { setProgress(workDataOf("err" to Prefs.lastError, "name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
+            if (e.code == 429 || e.code >= 500) Result.retry() else Result.failure()
+        } catch (e: Exception) {
+            if (isStopped || Prefs2.backupPaused) return Result.success()
+            Prefs.lastError = e.message ?: "erro"
+            try { setProgress(workDataOf("err" to Prefs.lastError, "name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
+            Result.failure()
+        }
     }
 }

@@ -20,3 +20,4 @@ App Android (Kotlin + Jetpack Compose + TDLib) que usa a sua própria conta do T
 - Linha do tempo por data, álbuns por pasta, busca, visualizador com zoom e streaming de vídeo
 - Restaurar para o celular, apagar da nuvem (com confirmação)
 - "Liberar armazenamento": apaga do celular só o que foi verificado (hash + tamanho + mensagem existente no Telegram), com confirmação do sistema
+- Sessão do Telegram salva no aparelho (não precisa redigitar o número ao reabrir). É possível cadastrar um e-mail de login; não existe entrada com conta Google.

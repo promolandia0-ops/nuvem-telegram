@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
@@ -66,18 +68,30 @@ object Td {
             useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
             apiId = id; apiHash = hash
             systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.3"
+            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.3.1"
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }
 
+    const val DEFAULT_TIMEOUT_MS = 45_000L
+
     @Suppress("UNCHECKED_CAST")
-    suspend fun <T : TdApi.Object> send(f: TdApi.Function<T>): T = suspendCancellableCoroutine { cont ->
+    private suspend fun <T : TdApi.Object> sendOnce(f: TdApi.Function<T>): T = suspendCancellableCoroutine { cont ->
         val c = client
         if (c == null) { cont.resumeWithException(TdException(500, "TDLib não iniciado")); return@suspendCancellableCoroutine }
         c.send(f) { r ->
             if (!cont.isActive) return@send
             if (r is TdApi.Error) cont.resumeWithException(TdException(r.code, r.message)) else cont.resume(r as T)
+        }
+    }
+
+    /** Envia um pedido ao TDLib. [timeoutMs] <= 0 desliga o limite (uploads longos). */
+    suspend fun <T : TdApi.Object> send(f: TdApi.Function<T>, timeoutMs: Long = DEFAULT_TIMEOUT_MS): T {
+        if (timeoutMs <= 0L) return sendOnce(f)
+        return try {
+            withTimeout(timeoutMs) { sendOnce(f) }
+        } catch (e: TimeoutCancellationException) {
+            throw TdException(408, "Tempo esgotado ao falar com o Telegram (${timeoutMs / 1000}s). Verifique a conexão e tente de novo.")
         }
     }
 

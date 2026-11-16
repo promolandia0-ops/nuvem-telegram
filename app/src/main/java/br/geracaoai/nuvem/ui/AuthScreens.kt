@@ -103,6 +103,18 @@ fun LoginScreen(state: TdApi.AuthorizationState?) {
                 Button({ go(TdApi.CheckAuthenticationPassword(input)) }, enabled = !busy && input.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Entrar") }
             }
             is TdApi.AuthorizationStateWaitRegistration -> AuthFrame(Icons.Rounded.Info, "Conta não encontrada", "Crie sua conta no app oficial do Telegram primeiro e depois volte aqui.") {}
+            is TdApi.AuthorizationStateWaitEmailAddress -> AuthFrame(Icons.Rounded.Email, "E-mail de verificação", "O Telegram pediu um e-mail nesta conta (não é login com o Google).") {
+                OutlinedTextField(input, { input = it.trim() }, label = { Text("E-mail") }, singleLine = true, isError = err != null, supportingText = { err?.let { Text(it) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(16.dp))
+                Button({ go(TdApi.SetAuthenticationEmailAddress(input)) }, enabled = !busy && "@" in input, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Continuar") }
+            }
+            is TdApi.AuthorizationStateWaitEmailCode -> AuthFrame(Icons.Rounded.Email, "Código do e-mail", "Enviamos um código para ${state.codeInfo?.emailAddressPattern ?: "seu e-mail"}.") {
+                OutlinedTextField(input, { input = it.filter(Char::isDigit) }, label = { Text("Código") }, singleLine = true, isError = err != null, supportingText = { err?.let { Text(it) } },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(16.dp))
+                Button({ go(TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode(input))) }, enabled = !busy && input.length >= 4, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Entrar") }
+            }
             else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(); Spacer(Modifier.height(12.dp))
@@ -122,6 +134,9 @@ fun traduz(m: String?): String = when {
     "PASSWORD_HASH_INVALID" in m -> "Senha incorreta."
     "API_ID" in m -> "api_id ou api_hash inválido."
     "FLOOD" in m || "Too Many" in m -> "Muitas tentativas. Aguarde alguns minutos."
+    "EMAIL" in m && "INVALID" in m -> "E-mail inválido."
+    "EMAIL" in m && "CODE" in m -> "Código de e-mail incorreto ou expirado."
+    "Tempo esgotado" in m -> m
     else -> m
 }
 

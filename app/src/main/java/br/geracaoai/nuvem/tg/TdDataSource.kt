@@ -21,7 +21,7 @@ class TdDataSource(private val fileId: Int, private val size: Long) : BaseDataSo
         uri = spec.uri; pos = spec.position
         remaining = if (spec.length != C.LENGTH_UNSET.toLong()) spec.length else size - pos
         transferInitializing(spec)
-        runBlocking { try { Td.send(TdApi.DownloadFile(fileId, 32, pos, 0, false)) } catch (_: Exception) {} }
+        runBlocking { try { Td.send(TdApi.DownloadFile(fileId, 32, pos, 0, false), 60_000) } catch (_: Exception) {} }
         transferStarted(spec)
         return remaining
     }
@@ -31,10 +31,10 @@ class TdDataSource(private val fileId: Int, private val size: Long) : BaseDataSo
         if (remaining <= 0) return C.RESULT_END_OF_INPUT
         val want = min(min(len.toLong(), remaining), 256 * 1024L)
         val data = runBlocking {
-            try { Td.send(TdApi.ReadFilePart(fileId, pos, want)).data }
+            try { Td.send(TdApi.ReadFilePart(fileId, pos, want), 60_000).data }
             catch (_: TdException) {
-                Td.send(TdApi.DownloadFile(fileId, 32, pos, want, true))
-                Td.send(TdApi.ReadFilePart(fileId, pos, want)).data
+                Td.send(TdApi.DownloadFile(fileId, 32, pos, want, true), 120_000)
+                Td.send(TdApi.ReadFilePart(fileId, pos, want), 60_000).data
             }
         }
         if (data.isEmpty()) return C.RESULT_END_OF_INPUT

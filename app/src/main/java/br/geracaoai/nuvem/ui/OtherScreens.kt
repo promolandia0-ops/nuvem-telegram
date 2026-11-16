@@ -90,10 +90,13 @@ fun BackupScreen() {
                     AnimatedContent(running, label = "prog") { r ->
                         if (r != null) {
                             val d = r.progress.getInt("done", 0); val t = r.progress.getInt("total", 0); val p = r.progress.getInt("pct", 0)
+                            val step = r.progress.getString("name") ?: "verificando…"
+                            val err = r.progress.getString("err")?.takeIf { it.isNotBlank() }
                             Column {
-                                Text("$d de $t • ${r.progress.getString("name") ?: "verificando…"}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(if (t == 0) step else "$d de $t • $step", maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Spacer(Modifier.height(6.dp)); LinearProgressIndicator({ if (t == 0) 0f else d / t.toFloat() }, Modifier.fillMaxWidth())
                                 Spacer(Modifier.height(4.dp)); LinearProgressIndicator({ p / 100f }, Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.tertiary)
+                                err?.let { Spacer(Modifier.height(8.dp)); Text("Erro: ${traduz(it)}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                             }
                         } else Text(buildString {
                             if (paused) append("Parado por você. Nada será enviado até tocar em Retomar.\n")
@@ -137,7 +140,20 @@ fun SettingsScreen(onLogout: () -> Unit) {
     val theme by Prefs.theme.collectAsStateWithLifecycle()
     var confirmOut by remember { mutableStateOf(false) }
     var syncing by remember { mutableStateOf(false) }
+    var emailPattern by remember { mutableStateOf<String?>(null) }
+    var emailDlg by remember { mutableStateOf(false) }
+    var emailAddr by remember { mutableStateOf("") }
+    var emailCode by remember { mutableStateOf("") }
+    var emailInfo by remember { mutableStateOf<TdApi.EmailAddressAuthenticationCodeInfo?>(null) }
+    var emailErr by remember { mutableStateOf<String?>(null) }
+    var emailBusy by remember { mutableStateOf(false) }
     val premium by Td.isPremium.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        try {
+            val st = Td.send(TdApi.GetPasswordState(), 20_000)
+            emailPattern = st.loginEmailAddressPattern.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {}
+    }
     LazyColumn(contentPadding = PaddingValues(16.dp)) {
         item { Text("Ajustes", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 8.dp)) }
         item { ListItem(headlineContent = { Text("Destino") }, supportingContent = { Text(Prefs.chatTitle.ifBlank { "—" } + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo") }, leadingContent = { Icon(Icons.Rounded.Cloud, null) }) }
@@ -146,13 +162,49 @@ fun SettingsScreen(onLogout: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Sistema", "Claro", "Escuro").forEachIndexed { i, l -> FilterChip(theme == i, { Prefs.setTheme(i) }, { Text(l) }) } }
             })
         }
+        item { ListItem(headlineContent = { Text("E-mail de login") },
+            supportingContent = { Text(if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.") },
+            leadingContent = { Icon(Icons.Rounded.Email, null) }, modifier = Modifier.clickable { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" }) }
+        item { ListItem(headlineContent = { Text("Sessão neste celular") }, supportingContent = { Text("Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.") }, leadingContent = { Icon(Icons.Rounded.PhoneAndroid, null) }) }
         item { ListItem(headlineContent = { Text("Reindexar nuvem") }, supportingContent = { Text(if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)") },
-            leadingContent = { Icon(Icons.Rounded.Sync, null) }, modifier = Modifier.clickable(enabled = !syncing) { syncing = true; scope.launch { try { Repo.syncIndex(full = true) } catch (_: Exception) {}; syncing = false } }) }
+            leadingContent = { Icon(Icons.Rounded.Sync, null) }, modifier = Modifier.clickable(enabled = !syncing) { syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false } }) }
         item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
             modifier = Modifier.clickable { Prefs.chatId = 0; Prefs.chatTitle = ""; onLogout() }) }
         item { ListItem(headlineContent = { Text("Sair / trocar de conta") }, supportingContent = { Text("Entrar com outro número. Os arquivos continuam no Telegram.") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.3 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+        item { Text("Nuvem 1.3.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
     }
+    if (emailDlg) AlertDialog({ emailDlg = false }, title = { Text("E-mail de login") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Isso não substitui o número e não é login com o Google. O Telegram pode enviar o código de verificação para este e-mail nas próximas vezes.")
+                if (emailInfo == null) {
+                    OutlinedTextField(emailAddr, { emailAddr = it.trim() }, label = { Text("E-mail") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                } else {
+                    Text("Enviamos um código para ${emailInfo!!.emailAddressPattern}.")
+                    OutlinedTextField(emailCode, { emailCode = it.filter(Char::isDigit) }, label = { Text("Código") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+                emailErr?.let { Text(traduz(it), color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button({
+                emailBusy = true; emailErr = null
+                scope.launch {
+                    try {
+                        if (emailInfo == null) {
+                            val info = Td.send(TdApi.SetLoginEmailAddress(emailAddr), 30_000)
+                            emailInfo = info
+                        } else {
+                            Td.send(TdApi.CheckLoginEmailAddressCode(TdApi.EmailAddressAuthenticationCode(emailCode)), 30_000)
+                            emailPattern = emailAddr
+                            emailDlg = false
+                        }
+                    } catch (e: Exception) { emailErr = e.message }
+                    emailBusy = false
+                }
+            }, enabled = !emailBusy && (if (emailInfo == null) emailAddr.contains("@") else emailCode.length >= 4)) { Text(if (emailInfo == null) "Enviar código" else "Confirmar") }
+        },
+        dismissButton = { TextButton({ emailDlg = false }) { Text("Cancelar") } })
     if (confirmOut) AlertDialog({ confirmOut = false }, title = { Text("Sair da conta?") }, text = { Text("Seus arquivos continuam no Telegram. Depois você pode entrar com o mesmo número ou com outro. O backup automático para até você entrar de novo.") },
         confirmButton = { Button({ confirmOut = false; scope.launch { try { Td.send(TdApi.LogOut()) } catch (_: Exception) {}; Prefs.chatId = 0; Prefs.chatTitle = ""; onLogout() } }) { Text("Sair") } },
         dismissButton = { TextButton({ confirmOut = false }) { Text("Cancelar") } })

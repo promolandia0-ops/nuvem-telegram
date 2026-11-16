@@ -71,16 +71,47 @@ object Repo {
     }
 
     // ---------- Destino ----------
+    /** Carrega a lista de chats. O 404 do TDLib significa "não há mais", não é erro. */
+    suspend fun loadChatList() {
+        repeat(8) {
+            try { Td.send(TdApi.LoadChats(TdApi.ChatListMain(), 100), 15_000) }
+            catch (e: TdException) { if (e.code == 404) return else return }
+        }
+    }
+
     suspend fun findNuvemChannels(): List<TdApi.Chat> {
-        try { Td.send(TdApi.LoadChats(TdApi.ChatListMain(), 200)) } catch (_: TdException) {}
-        val ids = Td.send(TdApi.SearchChats().apply { query = CHANNEL_TITLE; limit = 50 }).chatIds
-        return ids.map { Td.send(TdApi.GetChat(it)) }.filter { (it.type as? TdApi.ChatTypeSupergroup)?.isChannel == true && it.title.equals(CHANNEL_TITLE, true) }
+        loadChatList()
+        val ids = try { Td.send(TdApi.SearchChats().apply { query = CHANNEL_TITLE; limit = 50 }, 20_000).chatIds } catch (_: TdException) { longArrayOf() }
+        return ids.toList().mapNotNull { id -> try { Td.send(TdApi.GetChat(id), 15_000) } catch (_: Exception) { null } }
+            .filter { (it.type as? TdApi.ChatTypeSupergroup)?.isChannel == true && it.title.equals(CHANNEL_TITLE, true) }
     }
     suspend fun createChannel(): TdApi.Chat = Td.send(TdApi.CreateNewSupergroupChat().apply {
         title = CHANNEL_TITLE; isChannel = true; description = "Backup de fotos e vídeos (app Nuvem). Não apague."
-    })
-    suspend fun savedMessages(): TdApi.Chat { val me = Td.send(TdApi.GetMe()); return Td.send(TdApi.CreatePrivateChat(me.id, false)) }
+    }, 30_000)
+    suspend fun savedMessages(): TdApi.Chat { val me = Td.send(TdApi.GetMe(), 20_000); return Td.send(TdApi.CreatePrivateChat(me.id, false), 20_000) }
     fun useChat(c: TdApi.Chat) { Prefs.chatId = c.id; Prefs.chatTitle = c.title }
+
+    /** Garante um destino válido: reabre o canal salvo, ou acha/cria o canal privado “Nuvem”. */
+    suspend fun ensureDestination(): TdApi.Chat {
+        loadChatList()
+        val id = Prefs.chatId
+        if (id != 0L) {
+            try {
+                val c = Td.send(TdApi.GetChat(id), 20_000)
+                Prefs.chatTitle = c.title
+                try { Td.send(TdApi.OpenChat(id), 15_000) } catch (_: Exception) {}
+                return c
+            } catch (e: Exception) {
+                if (e is TdException && !ChatHistoryWalk.isMissingChat(e.code, e.message) && e.code != 408) throw e
+            }
+        }
+        val existing = try { findNuvemChannels().firstOrNull() } catch (_: Exception) { null }
+        if (existing != null) { useChat(existing); try { Td.send(TdApi.OpenChat(existing.id), 15_000) } catch (_: Exception) {}; return existing }
+        val created = createChannel()
+        useChat(created)
+        try { Td.send(TdApi.OpenChat(created.id), 15_000) } catch (_: Exception) {}
+        return created
+    }
 
     // ---------- Índice da nuvem ----------
     fun toCloud(m: TdApi.Message): CloudItem? {
@@ -91,23 +122,41 @@ object Repo {
             meta?.taken?.takeIf { it > 0 } ?: (m.date * 1000L), folder, meta?.path ?: "", meta?.hash ?: "", r.mini)
     }
 
-    /** Sincroniza o histórico do canal. Se [full], refaz tudo (detecta apagados). */
-    suspend fun syncIndex(full: Boolean = false) = withContext(Dispatchers.IO) {
-        val chat = Prefs.chatId; if (chat == 0L) return@withContext
-        try { Td.send(TdApi.OpenChat(chat)) } catch (_: Exception) {}
+    /** Sincroniza o histórico do canal. Se [full], refaz tudo (detecta apagados). Nunca fica em loop infinito. */
+    suspend fun syncIndex(full: Boolean = false, onProgress: ((Int) -> Unit)? = null) = withContext(Dispatchers.IO) {
+        val dest = try { ensureDestination() } catch (e: Exception) {
+            if (Prefs.chatId == 0L) return@withContext else throw e
+        }
+        val chat = dest.id
         if (full) Db.clearCloud(chat)
-        var from = 0L; var emptyRounds = 0
+        var from = 0L; var emptyRounds = 0; var pages = 0
         while (true) {
-            val r = Td.send(TdApi.GetChatHistory().apply { chatId = chat; fromMessageId = from; offset = 0; limit = 100; onlyLocal = false })
-            if (r.messages.isNullOrEmpty()) { if (++emptyRounds >= 2) break else continue }
+            val r = try {
+                Td.send(TdApi.GetChatHistory().apply { chatId = chat; fromMessageId = from; offset = 0; limit = 100; onlyLocal = false }, 20_000)
+            } catch (e: TdException) {
+                if (ChatHistoryWalk.isMissingChat(e.code, e.message)) {
+                    ensureDestination()
+                    break
+                }
+                // Canal novo/vazio às vezes responde vazio com atraso; trata timeout na 1ª página como vazio.
+                if (e.code == 408 && from == 0L && pages == 0) {
+                    val s = ChatHistoryWalk.next(from, emptyRounds, longArrayOf(), full, 0, pages)
+                    emptyRounds = s.emptyRounds; pages = s.pages
+                    if (s.done) break else continue
+                }
+                throw e
+            }
+            val msgs = r.messages ?: emptyArray()
             var known = 0
-            for (m in r.messages) {
+            for (m in msgs) {
                 if (!full && Db.hasMsg(chat, m.id)) known++
                 toCloud(m)?.let { Db.putCloud(it) }
             }
-            Db.bump()
-            if (!full && known == r.messages.size) break
-            from = r.messages.last().id
+            if (msgs.isNotEmpty()) Db.bump()
+            onProgress?.invoke(pages + 1)
+            val s = ChatHistoryWalk.next(from, emptyRounds, msgs.map { it.id }.toLongArray(), full, known, pages)
+            from = s.nextFromId; emptyRounds = s.emptyRounds; pages = s.pages
+            if (s.done) break
         }
     }
 
@@ -416,7 +465,7 @@ object Repo {
 
     suspend fun thumbPath(ci: CloudItem): String? = try {
         val t = thumbFileOf(message(ci))
-        t?.let { Td.send(TdApi.DownloadFile(it.id, 8, 0, 0, true)).local.path.ifBlank { null } }
+        t?.let { Td.send(TdApi.DownloadFile(it.id, 8, 0, 0, true), 180_000).local.path.ifBlank { null } }
     } catch (_: Exception) { null }
 
     fun originalItem(ci: CloudItem): CloudItem? = if (ci.hash.isBlank()) null else Db.originalByHash(ci.chatId, ci.hash)
@@ -424,7 +473,7 @@ object Repo {
     suspend fun fullPath(ci: CloudItem): String? {
         val src = originalItem(ci) ?: ci
         val f = fileOf(message(src)) ?: return null
-        return Td.send(TdApi.DownloadFile(f.id, 32, 0, 0, true)).local.path.ifBlank { null }
+        return Td.send(TdApi.DownloadFile(f.id, 32, 0, 0, true), 0).local.path.ifBlank { null }
     }
 
     suspend fun deleteFromCloud(ci: CloudItem) {

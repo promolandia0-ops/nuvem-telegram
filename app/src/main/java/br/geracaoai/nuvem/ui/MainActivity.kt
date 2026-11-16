@@ -59,7 +59,7 @@ fun MainShell(onLogout: () -> Unit) {
     LaunchedEffect(Unit) {
         perms.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO,
             Manifest.permission.ACCESS_MEDIA_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
-        try { Repo.syncIndex() } catch (_: Exception) {}
+        try { Repo.ensureDestination(); Repo.syncIndex() } catch (_: Exception) {}
     }
     BackHandler(viewer != null) { viewer = null }
     Box {
