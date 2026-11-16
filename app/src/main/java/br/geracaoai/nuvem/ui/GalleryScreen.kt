@@ -52,7 +52,8 @@ fun GalleryScreen(folder: String?, onOpen: (List<CloudItem>, Int) -> Unit) {
     val items = remember(all, query) {
         if (query.isBlank()) all else { val q = query.lowercase(); all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() } }
     }
-    val sections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
+    val albums = remember(items) { items.groupBy { it.folder.ifBlank { "Sem pasta" } }.toList().sortedByDescending { it.second.maxOfOrNull { c -> c.taken } ?: 0L } }
+    val daySections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
     Column(Modifier.fillMaxSize()) {
         if (folder == null) {
             SearchBar(query, { query = it }, {}, false, {}, Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -67,13 +68,31 @@ fun GalleryScreen(folder: String?, onOpen: (List<CloudItem>, Int) -> Unit) {
                     Text(if (query.isBlank()) "Nada na nuvem ainda.\nEscolha pastas em Backup para começar." else "Nada encontrado.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            sections.forEach { (day, list) ->
-                item(span = { GridItemSpan(maxLineSpan) }, key = "h$day") {
-                    Text(day.replaceFirstChar { it.uppercase() }, Modifier.padding(start = 12.dp, top = 16.dp, bottom = 8.dp),
-                        style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            if (folder == null) {
+                albums.forEach { (album, albumItems) ->
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "a$album") {
+                        Text("📁 $album", Modifier.padding(start = 12.dp, top = 16.dp, bottom = 4.dp),
+                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    albumItems.groupBy { dayFmt.format(Date(it.taken)) }.forEach { (day, list) ->
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "h$album$day") {
+                            Text(day.replaceFirstChar { it.uppercase() }, Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                                style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        items(list, key = { it.msgId }) { ci ->
+                            Thumb(ci, Modifier.animateItem().aspectRatio(1f).clickable { onOpen(items, items.indexOf(ci)) })
+                        }
+                    }
                 }
-                items(list, key = { it.msgId }) { ci ->
-                    Thumb(ci, Modifier.animateItem().aspectRatio(1f).clickable { onOpen(items, items.indexOf(ci)) })
+            } else {
+                daySections.forEach { (day, list) ->
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "h$day") {
+                        Text(day.replaceFirstChar { it.uppercase() }, Modifier.padding(start = 12.dp, top = 16.dp, bottom = 8.dp),
+                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    }
+                    items(list, key = { it.msgId }) { ci ->
+                        Thumb(ci, Modifier.animateItem().aspectRatio(1f).clickable { onOpen(items, items.indexOf(ci)) })
+                    }
                 }
             }
         }

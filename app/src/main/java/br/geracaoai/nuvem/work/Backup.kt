@@ -51,7 +51,7 @@ object Backup {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             for (id in ids) try {
                 val m = Td.send(org.drinkless.tdlib.TdApi.GetMessage(chat, id))
-                Repo.cancelSending(chat, id, Repo.docOf(m)?.document?.id ?: -1)
+                Repo.cancelSending(chat, id, Repo.fileOf(m)?.id ?: -1)
             } catch (_: Exception) {}
         }
     }
@@ -84,22 +84,47 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             val todo = LocalMedia.all(applicationContext, Prefs.folders).filter { it.size in 1..max && File(it.path).canRead() }
             var done = 0; var sent = 0
             val total = todo.size
-            for (i in todo) {
+            fun report(d: Int, name: String, pct: Int) {
+                setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct))
+                setForegroundAsync(ForegroundInfo(42, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            }
+            val albums = todo.groupBy { it.bucket }.toList().sortedByDescending { it.second.maxOf { i -> i.taken } }
+            album@ for ((album, albumItems) in albums) {
                 if (isStopped || Prefs2.backupPaused) break
-                coroutineContext.ensureActive()
-                val h = Repo.localHash(i)
-                if (Db.cloudByHash(chat, h)?.size != i.size) {
-                    var last = -1
-                    Repo.upload(applicationContext, i, h) { p ->
-                        val pct = (p * 100).toInt()
-                        if (pct != last) { last = pct
-                            setProgressAsync(workDataOf("done" to done, "total" to total, "name" to i.name, "pct" to pct))
-                            setForegroundAsync(ForegroundInfo(42, notif(i.name, done, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)) }
+                val pending = ArrayList<Pair<LocalItem, String>>()
+                for (i in albumItems.sortedBy { it.taken }) {
+                    if (isStopped || Prefs2.backupPaused) break@album
+                    val h = Repo.localHash(i)
+                    val existing = Db.visibleByHash(chat, h) ?: Db.cloudByHash(chat, h)
+                    if (existing?.size == i.size) {
+                        if (Prefs.originalPhotos && Db.originalByHash(chat, h) == null) {
+                            try {
+                                val m = Td.send(org.drinkless.tdlib.TdApi.GetMessage(chat, existing.msgId))
+                                var last = -1
+                                Repo.uploadOriginalIfNeeded(applicationContext, i, h, m) { p ->
+                                    val pct = (p * 100).toInt()
+                                    if (pct != last) { last = pct; report(done, "${album.ifBlank { "Álbum" }} • ${i.name}", pct) }
+                                }
+                            } catch (_: Exception) {}
+                        }
+                        done++; report(done, i.name, 100); continue
                     }
-                    sent++
+                    pending += i to h
                 }
-                done++
-                setProgress(workDataOf("done" to done, "total" to total, "name" to i.name, "pct" to 100))
+                if (pending.isEmpty()) continue
+                for (chunk in Repo.chunksForAlbum(pending)) {
+                    if (isStopped || Prefs2.backupPaused) break@album
+                    coroutineContext.ensureActive()
+                    var last = -1
+                    Repo.uploadGroup(applicationContext, chunk) { idx, p ->
+                        val name = "${album.ifBlank { "Álbum" }} • ${chunk[idx].first.name}"
+                        val pct = (p * 100).toInt()
+                        if (pct != last) { last = pct; report(done + idx, name, pct) }
+                    }
+                    sent += chunk.size; done += chunk.size
+                    report(done, chunk.last().first.name, 100)
+                }
+                if (!isStopped && !Prefs2.backupPaused) try { Repo.sendAlbumMarker(album) } catch (_: Exception) {}
             }
             if (isStopped || Prefs2.backupPaused) return Result.success()
             Prefs.lastBackup = System.currentTimeMillis(); Prefs.lastError = ""

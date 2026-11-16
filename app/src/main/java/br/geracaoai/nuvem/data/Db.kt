@@ -12,6 +12,7 @@ data class CloudItem(
 ) { val isVideo get() = mime.startsWith("video/") }
 
 const val WATCHED_FOLDER = "Assistidos no Telegram"
+const val ORIGINALS_FOLDER = "\u0001originais"
 
 object Db {
     private lateinit var h: SQLiteOpenHelper
@@ -45,8 +46,10 @@ object Db {
     fun hasMsg(chatId: Long, msgId: Long) = db.rawQuery("SELECT 1 FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { it.moveToFirst() }
 
     fun cloudByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=?", arrayOf("$chatId", hash)).firstOrNull()
-    /** Galeria normal (sem os vídeos assistidos no Telegram). */
-    fun allCloud(chatId: Long): List<CloudItem> = query("chat_id=? AND folder<>?", arrayOf("$chatId", WATCHED_FOLDER))
+    fun visibleByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=? AND folder<>?", arrayOf("$chatId", hash, ORIGINALS_FOLDER)).firstOrNull()
+    fun originalByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=? AND folder=?", arrayOf("$chatId", hash, ORIGINALS_FOLDER)).firstOrNull()
+    /** Galeria normal (sem assistidos nem os documentos-originais das fotos). */
+    fun allCloud(chatId: Long): List<CloudItem> = query("chat_id=? AND folder<>? AND folder<>?", arrayOf("$chatId", WATCHED_FOLDER, ORIGINALS_FOLDER))
     fun watchedCloud(chatId: Long): List<CloudItem> = query("chat_id=? AND folder=?", arrayOf("$chatId", WATCHED_FOLDER))
 
     /** Vídeos do cache do Telegram já processados (chave nome+tamanho). Fica mesmo após apagar da nuvem, para não reenviar. */

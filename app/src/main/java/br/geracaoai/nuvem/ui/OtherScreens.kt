@@ -74,8 +74,9 @@ fun BackupScreen() {
     var auto by remember { mutableStateOf(Prefs.autoBackup) }
     var wifi by remember { mutableStateOf(Prefs.wifiOnly) }
     var charging by remember { mutableStateOf(Prefs.chargingOnly) }
+    var origPhotos by remember { mutableStateOf(Prefs.originalPhotos) }
     LaunchedEffect(Unit) { buckets = withContext(Dispatchers.IO) { try { LocalMedia.buckets(ctx) } catch (_: Exception) { emptyList() } } }
-    fun save() { Prefs.folders = sel; Prefs.autoBackup = auto; Prefs.wifiOnly = wifi; Prefs.chargingOnly = charging; Backup.schedule(ctx) }
+    fun save() { Prefs.folders = sel; Prefs.autoBackup = auto; Prefs.wifiOnly = wifi; Prefs.chargingOnly = charging; Prefs.originalPhotos = origPhotos; Backup.schedule(ctx) }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             ElevatedCard(Modifier.fillMaxWidth()) {
@@ -114,6 +115,7 @@ fun BackupScreen() {
         item { SwitchRow("Backup automático", "A cada hora, em segundo plano", auto) { auto = it; save() } }
         item { SwitchRow("Somente no Wi-Fi", "Não usa dados móveis", wifi) { wifi = it; save() } }
         item { SwitchRow("Somente carregando", "Economiza bateria", charging) { charging = it; save() } }
+        item { SwitchRow("Fotos em qualidade original", "Envia a foto pra ver no Telegram e também o arquivo original, sem compressão", origPhotos) { origPhotos = it; save() } }
         item { Text("Pastas para backup", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
         if (buckets.isEmpty()) item { Text("Permita o acesso a fotos e vídeos para listar as pastas.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(buckets, key = { it.name }) { b ->
@@ -147,11 +149,11 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item { ListItem(headlineContent = { Text("Reindexar nuvem") }, supportingContent = { Text(if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)") },
             leadingContent = { Icon(Icons.Rounded.Sync, null) }, modifier = Modifier.clickable(enabled = !syncing) { syncing = true; scope.launch { try { Repo.syncIndex(full = true) } catch (_: Exception) {}; syncing = false } }) }
         item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
-            modifier = Modifier.clickable { Prefs.chatId = 0; onLogout() }) }
-        item { ListItem(headlineContent = { Text("Sair da conta") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+            modifier = Modifier.clickable { Prefs.chatId = 0; Prefs.chatTitle = ""; onLogout() }) }
+        item { ListItem(headlineContent = { Text("Sair / trocar de conta") }, supportingContent = { Text("Entrar com outro número. Os arquivos continuam no Telegram.") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
+        item { Text("Nuvem 1.3 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
     }
-    if (confirmOut) AlertDialog({ confirmOut = false }, title = { Text("Sair da conta?") }, text = { Text("Seus arquivos continuam no Telegram. O backup automático para até você entrar de novo.") },
-        confirmButton = { Button({ confirmOut = false; scope.launch { try { Td.send(TdApi.LogOut()) } catch (_: Exception) {}; Prefs.chatId = 0; onLogout() } }) { Text("Sair") } },
+    if (confirmOut) AlertDialog({ confirmOut = false }, title = { Text("Sair da conta?") }, text = { Text("Seus arquivos continuam no Telegram. Depois você pode entrar com o mesmo número ou com outro. O backup automático para até você entrar de novo.") },
+        confirmButton = { Button({ confirmOut = false; scope.launch { try { Td.send(TdApi.LogOut()) } catch (_: Exception) {}; Prefs.chatId = 0; Prefs.chatTitle = ""; onLogout() } }) { Text("Sair") } },
         dismissButton = { TextButton({ confirmOut = false }) { Text("Cancelar") } })
 }

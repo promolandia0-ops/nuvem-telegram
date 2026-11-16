@@ -108,13 +108,15 @@ private fun PhotoPage(ci: CloudItem) {
 @Composable
 private fun VideoPage(ci: CloudItem, active: Boolean) {
     val ctx = LocalContext.current
-    val doc by produceState<org.drinkless.tdlib.TdApi.Document?>(null, ci.msgId) { value = try { Repo.docOf(Repo.message(ci)) } catch (_: Exception) { null } }
-    val d = doc
+    val media by produceState<Pair<Int, Long>?>(null, ci.msgId) {
+        value = try { Repo.fileOf(Repo.message(ci))?.let { it.id to it.size } } catch (_: Exception) { null }
+    }
+    val d = media
     if (d == null || !active) { Thumb(ci, Modifier.fillMaxWidth().aspectRatio(1f)); return }
     val player = remember(ci.msgId) {
         ExoPlayer.Builder(ctx).build().apply {
-            setMediaSource(ProgressiveMediaSource.Factory(TdDataSource.Factory(d.document.id, d.document.size))
-                .createMediaSource(MediaItem.fromUri("tdlib://file/${d.document.id}")))
+            setMediaSource(ProgressiveMediaSource.Factory(TdDataSource.Factory(d.first, d.second))
+                .createMediaSource(MediaItem.fromUri("tdlib://file/${d.first}")))
             prepare(); playWhenReady = true
         }
     }

@@ -19,6 +19,8 @@ object Prefs {
     var chargingOnly: Boolean get() = p.getBoolean("charging", false); set(v) = p.edit().putBoolean("charging", v).apply()
     var lastError: String get() = p.getString("err", "")!!; set(v) = p.edit().putString("err", v).apply()
     var lastBackup: Long get() = p.getLong("last", 0); set(v) = p.edit().putLong("last", v).apply()
+    /** Envia a foto (pra ver no Telegram) e também o arquivo original como documento. */
+    var originalPhotos: Boolean get() = p.getBoolean("orig_photos", true); set(v) = p.edit().putBoolean("orig_photos", v).apply()
     fun setTheme(v: Int) { p.edit().putInt("theme", v).apply(); theme.value = v }
 }
 

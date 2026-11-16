@@ -12,7 +12,10 @@ App Android (Kotlin + Jetpack Compose + TDLib) que usa a sua própria conta do T
 
 ## Recursos
 - Backup automático (Wi-Fi/carregando), em segundo plano com WorkManager, com retomada
-- Envio como documento (sem compressão), até 2 GB (4 GB com Premium)
+- Envio como foto e vídeo no Telegram (aparece e toca direto no app). Vídeos sobem no arquivo original, sem recompressão no celular. Se o Telegram recusar (tipo não suportado ou arquivo > 2 GB), cai para documento.
+- Fotos em qualidade original (ligado por padrão): além da foto pra ver, envia o arquivo original como documento (a restauração usa o original). O Telegram comprime a foto de visualização (~2560 px).
+- Organização por álbum (Camera, WhatsApp, Pictures…): envia um álbum por vez, em grupos de até 10, e no fim marca “📁 Álbum …”. A galeria do app também agrupa por álbum.
+- Até 2 GB por arquivo (4 GB com Premium)
 - Metadados (SHA-256, tamanho, data, caminho) na legenda evitam duplicados
 - Linha do tempo por data, álbuns por pasta, busca, visualizador com zoom e streaming de vídeo
 - Restaurar para o celular, apagar da nuvem (com confirmação)
