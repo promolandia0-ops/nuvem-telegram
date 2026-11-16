@@ -3,6 +3,7 @@ package br.geracaoai.nuvem.data
 import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.json.JSONObject
 
 object Prefs {
     private lateinit var p: SharedPreferences
@@ -21,6 +22,33 @@ object Prefs {
     var lastBackup: Long get() = p.getLong("last", 0); set(v) = p.edit().putLong("last", v).apply()
     /** Envia a foto (pra ver no Telegram) e também o arquivo original como documento. */
     var originalPhotos: Boolean get() = p.getBoolean("orig_photos", true); set(v) = p.edit().putBoolean("orig_photos", v).apply()
+    var indexMsgId: Long get() = p.getLong("index_msg", 0); set(v) = p.edit().putLong("index_msg", v).apply()
+    var legacyChatId: Long get() = p.getLong("legacy_chat", 0); set(v) = p.edit().putLong("legacy_chat", v).apply()
+    var smartSort: Boolean get() = p.getBoolean("smart_sort", true); set(v) = p.edit().putBoolean("smart_sort", v).apply()
+    var instantBackup: Boolean get() = p.getBoolean("instant", true); set(v) = p.edit().putBoolean("instant", v).apply()
+    /** 0 = desligado. Depois de X dias, itens já confirmados na nuvem podem sair do celular. */
+    var autoFreeDays: Int get() = p.getInt("auto_free_days", 0); set(v) = p.edit().putInt("auto_free_days", v).apply()
+    var secretChatId: Long get() = p.getLong("secret_chat", 0); set(v) = p.edit().putLong("secret_chat", v).apply()
+    var secretFolders: Set<String> get() = p.getStringSet("secret_folders", emptySet())!!; set(v) = p.edit().putStringSet("secret_folders", v).apply()
+    var secretPinHash: String get() = p.getString("secret_pin", "")!!; set(v) = p.edit().putString("secret_pin", v).apply()
+    var topicMap: String get() = p.getString("topic_map", "")!!; set(v) = p.edit().putString("topic_map", v).apply()
+    fun galleryChats(): List<Long> = listOf(chatId, legacyChatId).filter { it != 0L }.distinct()
+    fun indexId(chat: Long): Long {
+        try {
+            val j = JSONObject(p.getString("index_map", "") ?: "")
+            if (j.has("$chat")) return j.optLong("$chat")
+        } catch (_: Exception) {}
+        return if (chat == chatId) indexMsgId else 0L
+    }
+    fun setIndexId(chat: Long, id: Long) {
+        if (chat == chatId) indexMsgId = id
+        val j = try { JSONObject(p.getString("index_map", "") ?: "{}") } catch (_: Exception) { JSONObject() }
+        j.put("$chat", id)
+        p.edit().putString("index_map", j.toString()).apply()
+    }
+    fun destChats(): List<Long> = listOf(chatId, legacyChatId, secretChatId).filter { it != 0L }.distinct()
+    fun clearDest() { chatId = 0; chatTitle = ""; indexMsgId = 0; legacyChatId = 0; topicMap = "" }
+    fun clearAccount() { clearDest(); secretChatId = 0; secretFolders = emptySet() }
     fun setTheme(v: Int) { p.edit().putInt("theme", v).apply(); theme.value = v }
 }
 

@@ -4,7 +4,7 @@ val ks = Properties().apply { val f = rootProject.file("keystore/keystore.proper
 android {
   namespace = "br.geracaoai.nuvem"
   compileSdk = 35
-  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 5; versionName = "1.3.1"
+  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 6; versionName = "1.4.0"
     ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } }
   signingConfigs { create("release") { if (ks.isNotEmpty()) { storeFile = rootProject.file(ks["storeFile"] as String); storePassword = ks["storePassword"] as String; keyAlias = ks["keyAlias"] as String; keyPassword = ks["keyPassword"] as String } } }
   buildTypes { release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); signingConfig = signingConfigs.getByName("release") } }
@@ -32,6 +32,8 @@ dependencies {
   implementation("dev.rikka.shizuku:api:13.1.5")
   implementation("dev.rikka.shizuku:provider:13.1.5")
   implementation("androidx.documentfile:documentfile:1.0.1")
+  implementation("androidx.biometric:biometric:1.1.0")
+  implementation("androidx.fragment:fragment-ktx:1.8.5")
   testImplementation("junit:junit:4.13.2")
   testImplementation("org.json:json:20240303")
 }

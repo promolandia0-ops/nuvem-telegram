@@ -155,8 +155,8 @@ object Watched {
                     if (dur <= 0) { Db.markSeen("bad:${f.key}:${f.mtime}"); return@forEachIndexed }
                     val meta = Meta(hash, t.length(), f.mtime, name, mime, WATCHED_FOLDER, "${f.src}:${f.id}")
                     var last = -1
-                    Repo.uploadFile(t.absolutePath, t.length(), "$name\n$TAG\n" + meta.toCaption().substringAfter('\n'), thumb, { p ->
-                        val pct = (p * 100).toInt(); if (pct != last) { last = pct; onProgress(Progress(idx, todo.size, name, pct)) } }, mime)
+                    Repo.uploadFile(t.absolutePath, t.length(), Classify.shortCaption(f.mtime, WATCHED_FOLDER), thumb, { p ->
+                        val pct = (p * 100).toInt(); if (pct != last) { last = pct; onProgress(Progress(idx, todo.size, name, pct)) } }, mime, meta = meta)
                     Db.markSeen(f.key); sent++
                 }
             } finally { tmp?.delete(); thumb?.delete() }

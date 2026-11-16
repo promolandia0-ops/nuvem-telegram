@@ -18,5 +18,6 @@ class App : Application() {
         Td.init(this)
         Backup.schedule(this)
         br.geracaoai.nuvem.work.WatchedSync.schedule(this)
+        br.geracaoai.nuvem.work.MediaWatch.start(this)
     }
 }

@@ -2,7 +2,7 @@ package br.geracaoai.nuvem.ui
 
 import android.Manifest
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -22,7 +22,7 @@ import br.geracaoai.nuvem.data.Repo
 import br.geracaoai.nuvem.tg.Td
 import org.drinkless.tdlib.TdApi
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

@@ -44,7 +44,17 @@ object Db {
     fun deleteCloud(chatId: Long, msgId: Long) { db.delete("cloud", "chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")); bump() }
     fun clearCloud(chatId: Long) { db.delete("cloud", "chat_id=?", arrayOf("$chatId")); bump() }
     fun hasMsg(chatId: Long, msgId: Long) = db.rawQuery("SELECT 1 FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { it.moveToFirst() }
+    fun getCloud(chatId: Long, msgId: Long): CloudItem? = query("chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).firstOrNull()
+    /** Todos os itens do canal, inclusive originais e assistidos (para o índice). */
+    fun allForIndex(chatId: Long): List<CloudItem> = query("chat_id=?", arrayOf("$chatId"))
 
+    fun anyByHash(hash: String, size: Long? = null): CloudItem? {
+        if (hash.isBlank()) return null
+        return if (size != null && size > 0) query("hash=? AND size=?", arrayOf(hash, "$size")).firstOrNull()
+        else query("hash=?", arrayOf(hash)).firstOrNull()
+    }
+    fun allCloudMany(chatIds: List<Long>): List<CloudItem> =
+        chatIds.filter { it != 0L }.distinct().flatMap { allCloud(it) }.sortedByDescending { it.taken }
     fun cloudByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=?", arrayOf("$chatId", hash)).firstOrNull()
     fun visibleByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=? AND folder<>?", arrayOf("$chatId", hash, ORIGINALS_FOLDER)).firstOrNull()
     fun originalByHash(chatId: Long, hash: String): CloudItem? = query("chat_id=? AND hash=? AND folder=?", arrayOf("$chatId", hash, ORIGINALS_FOLDER)).firstOrNull()

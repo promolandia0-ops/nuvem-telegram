@@ -19,7 +19,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import br.geracaoai.nuvem.data.Prefs
-import br.geracaoai.nuvem.data.Repo
+import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.tg.Td
 import kotlinx.coroutines.launch
 import org.drinkless.tdlib.TdApi
@@ -126,18 +126,20 @@ fun LoginScreen(state: TdApi.AuthorizationState?) {
     }
 }
 
-fun traduz(m: String?): String = when {
-    m == null -> "Erro desconhecido"
-    "PHONE_NUMBER_INVALID" in m -> "Número inválido. Use o formato +55 11 99999-9999."
-    "PHONE_CODE_INVALID" in m -> "Código incorreto."
-    "PHONE_CODE_EXPIRED" in m -> "Código expirou. Volte e peça outro."
-    "PASSWORD_HASH_INVALID" in m -> "Senha incorreta."
-    "API_ID" in m -> "api_id ou api_hash inválido."
-    "FLOOD" in m || "Too Many" in m -> "Muitas tentativas. Aguarde alguns minutos."
-    "EMAIL" in m && "INVALID" in m -> "E-mail inválido."
-    "EMAIL" in m && "CODE" in m -> "Código de e-mail incorreto ou expirado."
-    "Tempo esgotado" in m -> m
-    else -> m
+fun traduz(m: String?): String {
+    if (m == null) return "Erro desconhecido"
+    if (isCancelMessage(m)) return "Backup interrompido."
+    return when {
+        "PHONE_NUMBER_INVALID" in m -> "Número inválido. Use o formato +55 11 99999-9999."
+        "PHONE_CODE_INVALID" in m -> "Código incorreto."
+        "PHONE_CODE_EXPIRED" in m -> "Código expirou. Volte e peça outro."
+        "PASSWORD_HASH_INVALID" in m -> "Senha incorreta."
+        "API_ID" in m -> "api_id ou api_hash inválido."
+        "EMAIL" in m && "INVALID" in m -> "E-mail inválido."
+        "EMAIL" in m && "CODE" in m -> "Código de e-mail incorreto ou expirado."
+        "Tempo esgotado" in m -> m
+        else -> describeCreateError(Exception(m)).ifBlank { m }
+    }
 }
 
 @Composable
@@ -148,14 +150,21 @@ fun DestinationScreen(onDone: () -> Unit) {
     var err by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { found = try { Repo.findNuvemChannels() } catch (e: Exception) { emptyList() } }
     fun pick(f: suspend () -> TdApi.Chat) { busy = true; scope.launch { try { Repo.useChat(f()); onDone() } catch (e: Exception) { err = traduz(e.message) }; busy = false } }
-    AuthFrame(Icons.Rounded.CloudQueue, "Onde guardar?", "Recomendado: um canal privado “Nuvem” só seu. Ninguém mais vê.") {
+    AuthFrame(Icons.Rounded.CloudQueue, "Onde guardar?", "O ideal é um grupo privado “Nuvem” só seu, com tópicos por álbum. Se a conta for nova, o Telegram às vezes bloqueia criar grupo ou canal — aí use Mensagens Salvas por enquanto.") {
         if (found == null) CircularProgressIndicator()
         found?.forEach { c -> OutlinedCard({ pick { c } }, Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            ListItem(headlineContent = { Text("Usar canal existente “${c.title}”") }, leadingContent = { Icon(Icons.Rounded.Folder, null) }) } }
+            ListItem(headlineContent = { Text("Usar “${c.title}” já existente") }, leadingContent = { Icon(Icons.Rounded.Folder, null) }) } }
         Spacer(Modifier.height(8.dp))
-        Button({ pick { Repo.createChannel() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Criar canal privado “Nuvem”") }
+        Button({ pick { Repo.createChannel() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+            Text(if (busy) "Criando…" else "Criar grupo privado “Nuvem”")
+        }
         Spacer(Modifier.height(8.dp))
         OutlinedButton({ pick { Repo.savedMessages() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Usar Mensagens Salvas") }
-        err?.let { Spacer(Modifier.height(8.dp)); Text(it, color = MaterialTheme.colorScheme.error) }
+        err?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.height(8.dp))
+            Text("Se não der pra criar o grupo agora, use Mensagens Salvas. Os tópicos ficam pra quando o Telegram liberar a criação.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }

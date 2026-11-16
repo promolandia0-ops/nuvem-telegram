@@ -79,66 +79,175 @@ object Repo {
         }
     }
 
-    suspend fun findNuvemChannels(): List<TdApi.Chat> {
+    suspend fun findNuvemChats(): List<TdApi.Chat> {
         loadChatList()
         val ids = try { Td.send(TdApi.SearchChats().apply { query = CHANNEL_TITLE; limit = 50 }, 20_000).chatIds } catch (_: TdException) { longArrayOf() }
         return ids.toList().mapNotNull { id -> try { Td.send(TdApi.GetChat(id), 15_000) } catch (_: Exception) { null } }
-            .filter { (it.type as? TdApi.ChatTypeSupergroup)?.isChannel == true && it.title.equals(CHANNEL_TITLE, true) }
+            .filter { it.title.equals(CHANNEL_TITLE, true) && it.type is TdApi.ChatTypeSupergroup }
     }
-    suspend fun createChannel(): TdApi.Chat = Td.send(TdApi.CreateNewSupergroupChat().apply {
-        title = CHANNEL_TITLE; isChannel = true; description = "Backup de fotos e vídeos (app Nuvem). Não apague."
-    }, 30_000)
-    suspend fun savedMessages(): TdApi.Chat { val me = Td.send(TdApi.GetMe(), 20_000); return Td.send(TdApi.CreatePrivateChat(me.id, false), 20_000) }
-    fun useChat(c: TdApi.Chat) { Prefs.chatId = c.id; Prefs.chatTitle = c.title }
+    suspend fun findNuvemChannels(): List<TdApi.Chat> = findNuvemChats()
+    /**
+     * Cria um destino no Telegram tentando, nesta ordem: grupo com tópicos, grupo comum, canal.
+     * Contas novas muitas vezes não podem criar canal, mas ainda criam grupo. Se tudo falhar,
+     * o erro vem traduzido (restrição, flood, etc.).
+     */
+    suspend fun createSupergroup(title: String, description: String, welcome: Boolean = true): TdApi.Chat {
+        data class Mode(val forum: Boolean, val channel: Boolean)
+        val modes = listOf(Mode(true, false), Mode(false, false), Mode(false, true))
+        var last: Exception? = null
+        for (mode in modes) {
+            try {
+                val chat = Td.send(TdApi.CreateNewSupergroupChat().apply {
+                    this.title = title; isForum = mode.forum; isChannel = mode.channel; this.description = description
+                }, 30_000)
+                try { Td.send(TdApi.OpenChat(chat.id), 15_000) } catch (_: Exception) {}
+                if (welcome) try { sendWelcome(chat.id) } catch (_: Exception) {}
+                return chat
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: TdException) {
+                last = e
+                if (e.code == 429) break
+            } catch (e: Exception) { last = e }
+        }
+        throw TdException((last as? TdException)?.code ?: 0, describeCreateError(last ?: Exception("Não foi possível criar o destino.")))
+    }
 
-    /** Garante um destino válido: reabre o canal salvo, ou acha/cria o canal privado “Nuvem”. */
+    private suspend fun sendWelcome(chatId: Long) {
+        val tmp = Td.send(TdApi.SendMessage().apply {
+            this.chatId = chatId
+            inputMessageContent = TdApi.InputMessageText().apply { text = TdApi.FormattedText("☁️ Nuvem pronto", emptyArray()) }
+            options = sendOpts()
+        }, 20_000)
+        try { Td.awaitSend(tmp.id) } catch (_: Exception) {}
+    }
+
+    suspend fun createForum(): TdApi.Chat = createSupergroup(CHANNEL_TITLE, "Backup de fotos e vídeos (app Nuvem). Não apague.")
+    suspend fun createChannel(): TdApi.Chat = createForum()
+    suspend fun createSecretChat(): TdApi.Chat = createSupergroup("Nuvem Secreto", "Álbum secreto do app Nuvem. Não apague.")
+    suspend fun savedMessages(): TdApi.Chat { val me = Td.send(TdApi.GetMe(), 20_000); return Td.send(TdApi.CreatePrivateChat(me.id, false), 20_000) }
+    fun useChat(c: TdApi.Chat) {
+        if (Prefs.chatId != c.id) { Prefs.indexMsgId = 0; Prefs.topicMap = "" }
+        Prefs.chatId = c.id; Prefs.chatTitle = c.title
+    }
+
+    /** Garante um destino válido: reabre o salvo, ou acha/cria o grupo “Nuvem” com tópicos. */
     suspend fun ensureDestination(): TdApi.Chat {
         loadChatList()
         val id = Prefs.chatId
+        var chat: TdApi.Chat? = null
+        if (id != 0L) {
+            try {
+                chat = Td.send(TdApi.GetChat(id), 20_000)
+                Prefs.chatTitle = chat.title
+                try { Td.send(TdApi.OpenChat(id), 15_000) } catch (_: Exception) {}
+            } catch (e: Exception) {
+                if (e is TdException && !ChatHistoryWalk.isMissingChat(e.code, e.message) && e.code != 408) throw e
+            }
+        }
+        if (chat == null) {
+            val existing = try { findNuvemChats().firstOrNull() } catch (_: Exception) { null }
+            if (existing != null) {
+                useChat(existing); try { Td.send(TdApi.OpenChat(existing.id), 15_000) } catch (_: Exception) {}
+                chat = existing
+            } else {
+                val created = createForum()
+                useChat(created)
+                try { Td.send(TdApi.OpenChat(created.id), 15_000) } catch (_: Exception) {}
+                chat = created
+            }
+        }
+        return Topics.ensureForum(chat!!)
+    }
+
+    suspend fun ensureSecretDestination(): TdApi.Chat {
+        val id = Prefs.secretChatId
         if (id != 0L) {
             try {
                 val c = Td.send(TdApi.GetChat(id), 20_000)
-                Prefs.chatTitle = c.title
                 try { Td.send(TdApi.OpenChat(id), 15_000) } catch (_: Exception) {}
+                val type = c.type as? TdApi.ChatTypeSupergroup
+                if (type != null && !type.isChannel) {
+                    try {
+                        val sg = Td.send(TdApi.GetSupergroup(type.supergroupId), 15_000)
+                        if (!sg.isForum) Td.send(TdApi.ToggleSupergroupIsForum(type.supergroupId, true, true), 20_000)
+                    } catch (_: Exception) {}
+                }
                 return c
             } catch (e: Exception) {
                 if (e is TdException && !ChatHistoryWalk.isMissingChat(e.code, e.message) && e.code != 408) throw e
             }
         }
-        val existing = try { findNuvemChannels().firstOrNull() } catch (_: Exception) { null }
-        if (existing != null) { useChat(existing); try { Td.send(TdApi.OpenChat(existing.id), 15_000) } catch (_: Exception) {}; return existing }
-        val created = createChannel()
-        useChat(created)
+        val created = createSecretChat()
+        Prefs.secretChatId = created.id
         try { Td.send(TdApi.OpenChat(created.id), 15_000) } catch (_: Exception) {}
         return created
     }
 
     // ---------- Índice da nuvem ----------
-    fun toCloud(m: TdApi.Message): CloudItem? {
-        val r = remoteOf(m) ?: return null
-        val meta = Meta.parse(captionOf(m))
-        val folder = if (meta?.original == true) ORIGINALS_FOLDER else (meta?.folder ?: "Outros")
-        return CloudItem(m.id, m.chatId, meta?.name ?: r.name, meta?.mime?.ifBlank { null } ?: r.mime, meta?.size ?: r.file.size,
-            meta?.taken?.takeIf { it > 0 } ?: (m.date * 1000L), folder, meta?.path ?: "", meta?.hash ?: "", r.mini)
+    fun isIndexMessage(m: TdApi.Message): Boolean {
+        val d = (m.content as? TdApi.MessageDocument)?.document ?: return false
+        return Meta.isIndexName(d.fileName)
     }
 
-    /** Sincroniza o histórico do canal. Se [full], refaz tudo (detecta apagados). Nunca fica em loop infinito. */
+    fun toCloud(m: TdApi.Message): CloudItem? {
+        if (isIndexMessage(m)) return null
+        val r = remoteOf(m) ?: return null
+        val meta = Meta.parse(captionOf(m))
+        val known = if (meta == null) Db.getCloud(m.chatId, m.id) else null
+        if (meta == null && known != null && known.hash.isNotBlank()) {
+            return if (known.mini == null && r.mini != null) known.copy(mini = r.mini) else known
+        }
+        val folder = when {
+            meta?.original == true -> ORIGINALS_FOLDER
+            !meta?.folder.isNullOrBlank() -> meta!!.folder
+            known != null && known.folder.isNotBlank() -> known.folder
+            else -> "Outros"
+        }
+        return CloudItem(
+            m.id, m.chatId,
+            meta?.name?.ifBlank { null } ?: known?.name?.ifBlank { null } ?: r.name.ifBlank { "item" },
+            meta?.mime?.ifBlank { null } ?: known?.mime?.ifBlank { null } ?: r.mime,
+            meta?.size?.takeIf { it > 0 } ?: known?.size?.takeIf { it > 0 } ?: r.file.size,
+            meta?.taken?.takeIf { it > 0 } ?: known?.taken?.takeIf { it > 0 } ?: (m.date * 1000L),
+            folder,
+            meta?.path?.ifBlank { null } ?: known?.path ?: "",
+            meta?.hash?.ifBlank { null } ?: known?.hash ?: "",
+            r.mini ?: known?.mini,
+        )
+    }
+
+    fun remember(msg: TdApi.Message, meta: Meta) {
+        val r = remoteOf(msg)
+        val folder = if (meta.original) ORIGINALS_FOLDER else meta.folder.ifBlank { "Outros" }
+        Db.putCloud(CloudItem(msg.id, msg.chatId, meta.name, meta.mime.ifBlank { r?.mime ?: "" }, meta.size,
+            meta.taken, folder, meta.path, meta.hash, r?.mini))
+        Db.bump()
+    }
+
+    /** Sincroniza o histórico do destino (e do canal antigo, se houver). Se [full], refaz tudo. */
     suspend fun syncIndex(full: Boolean = false, onProgress: ((Int) -> Unit)? = null) = withContext(Dispatchers.IO) {
         val dest = try { ensureDestination() } catch (e: Exception) {
             if (Prefs.chatId == 0L) return@withContext else throw e
         }
-        val chat = dest.id
-        if (full) Db.clearCloud(chat)
+        val chats = (listOf(dest.id) + Prefs.destChats()).filter { it != 0L }.distinct()
+        for (chat in chats) {
+            if (full) Db.clearCloud(chat)
+            try { pullIndex(chat) } catch (_: Exception) {}
+            val topics = try { Topics.list(chat) } catch (_: Exception) { emptyList() }
+            if (topics.isNotEmpty()) {
+                for (tp in topics) walkMessages(chat, full, tp.forumTopicId, onProgress)
+            } else walkMessages(chat, full, 0, onProgress)
+        }
+    }
+
+    private suspend fun walkMessages(chat: Long, full: Boolean, topicId: Int, onProgress: ((Int) -> Unit)?) {
         var from = 0L; var emptyRounds = 0; var pages = 0
         while (true) {
             val r = try {
-                Td.send(TdApi.GetChatHistory().apply { chatId = chat; fromMessageId = from; offset = 0; limit = 100; onlyLocal = false }, 20_000)
+                if (topicId != 0) Td.send(TdApi.GetForumTopicHistory(chat, topicId, from, 0, 100), 20_000)
+                else Td.send(TdApi.GetChatHistory().apply { chatId = chat; fromMessageId = from; offset = 0; limit = 100; onlyLocal = false }, 20_000)
             } catch (e: TdException) {
-                if (ChatHistoryWalk.isMissingChat(e.code, e.message)) {
-                    ensureDestination()
-                    break
-                }
-                // Canal novo/vazio às vezes responde vazio com atraso; trata timeout na 1ª página como vazio.
+                if (ChatHistoryWalk.isMissingChat(e.code, e.message)) break
                 if (e.code == 408 && from == 0L && pages == 0) {
                     val s = ChatHistoryWalk.next(from, emptyRounds, longArrayOf(), full, 0, pages)
                     emptyRounds = s.emptyRounds; pages = s.pages
@@ -231,72 +340,131 @@ object Repo {
     fun metaOf(i: LocalItem, hash: String, original: Boolean = false) =
         Meta(hash, i.size, i.taken, i.name, i.mime, i.bucket, i.relPath + i.name, original)
 
-    /** Envia como foto ou vídeo (vídeo no arquivo original). Se a opção estiver ligada, a foto também sobe o original como documento. */
-    suspend fun upload(c: Context, i: LocalItem, hash: String, onProgress: (Float) -> Unit): TdApi.Message {
+    fun mediaHints(i: LocalItem): Triple<Long, Int, Int> {
+        return if (i.mime.startsWith("video/") || Meta.mimeFromName(i.name).startsWith("video/")) {
+            val (dur, w, h) = videoInfo(i.path)
+            Triple(dur * 1000L, w, h)
+        } else {
+            val (w, h) = imageSize(i.path)
+            Triple(0L, w, h)
+        }
+    }
+
+    fun captionFor(i: LocalItem, folder: String, original: Boolean = false) =
+        Classify.shortCaption(i.taken, folder, original)
+
+    /** Envia como foto ou vídeo (vídeo no arquivo original). Originais de foto sobem depois, em álbum de documentos. */
+    suspend fun upload(c: Context, i: LocalItem, hash: String, onProgress: (Float) -> Unit, chatId: Long = Prefs.chatId, topicId: Int = 0, folder: String = i.bucket): TdApi.Message {
         val thumb = thumbFor(c, i)
         try {
-            val msg = uploadFile(i.path, i.size, metaOf(i, hash).toCaption(), thumb, onProgress, i.mime, c.cacheDir)
-            uploadOriginalIfNeeded(c, i, hash, msg, onProgress)
-            return msg
+            return uploadFile(i.path, i.size, captionFor(i, folder), thumb, onProgress, i.mime, c.cacheDir, meta = metaOf(i, hash), chatId = chatId, topicId = topicId)
         } finally { thumb?.delete() }
     }
 
-    /** Agrupa itens do mesmo álbum: mídia em lotes de até 10; documentos sozinhos. */
+    /**
+     * Agrupa na ordem recebida (já deve estar por data): mídia (foto+vídeo) em lotes de até 10
+     * e documentos em lotes de até 10, sem misturar os dois tipos no mesmo grupo.
+     */
     fun chunksForAlbum(items: List<Pair<LocalItem, String>>): List<List<Pair<LocalItem, String>>> {
         val out = ArrayList<List<Pair<LocalItem, String>>>()
-        val cur = ArrayList<Pair<LocalItem, String>>()
-        fun flush() { if (cur.isNotEmpty()) { out += cur.toList(); cur.clear() } }
+        val media = ArrayList<Pair<LocalItem, String>>()
+        val docs = ArrayList<Pair<LocalItem, String>>()
+        fun flushMedia() { if (media.isNotEmpty()) { out += media.toList(); media.clear() } }
+        fun flushDocs() { if (docs.isNotEmpty()) { out += docs.toList(); docs.clear() } }
         for (p in items) {
             val kind = Meta.sendKind(p.first.mime.ifBlank { Meta.mimeFromName(p.first.name) }, p.first.size)
-            if (kind == SendKind.DOCUMENT) { flush(); out += listOf(p) }
-            else { cur += p; if (cur.size == 10) flush() }
+            if (kind == SendKind.DOCUMENT) {
+                flushMedia(); docs += p; if (docs.size == 10) flushDocs()
+            } else {
+                flushDocs(); media += p; if (media.size == 10) flushMedia()
+            }
         }
-        flush(); return out
+        flushMedia(); flushDocs(); return out
     }
 
-    /** Envia um lote do mesmo álbum (álbum de mídia no Telegram, até 10). Se falhar, envia um a um. */
-    suspend fun uploadGroup(c: Context, batch: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit): List<TdApi.Message> {
+    /** Envia um lote (álbum de até 10). Se falhar, envia um a um, sem reenviar o que já saiu. */
+    suspend fun uploadGroup(c: Context, batch: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit, chatId: Long = Prefs.chatId, topicId: Int = 0, folder: String = batch.first().first.bucket): List<TdApi.Message> {
         if (batch.size <= 1) {
-            val (i, h) = batch.first(); return listOf(upload(c, i, h) { onProgress(0, it) })
+            val (i, h) = batch.first(); return listOf(upload(c, i, h, { onProgress(0, it) }, chatId, topicId, folder))
         }
         val thumbs = batch.map { thumbFor(c, it.first) }
         try {
-            val contents = batch.mapIndexed { idx, (i, h) ->
+            val contents = batch.mapIndexed { idx, (i, _) ->
                 val kind = Meta.sendKind(i.mime.ifBlank { Meta.mimeFromName(i.name) }, i.size)
-                buildContent(kind, i.path, metaOf(i, h).toCaption(), thumbs[idx])
+                val cap = if (idx == 0) captionFor(i, folder) else ""
+                buildContent(kind, i.path, cap, thumbs[idx])
             }
-            val started = try { startAlbum(contents) }
+            val metas = batch.map { (i, h) -> metaOf(i, h) }
+            val started = try { startAlbum(contents, chatId, topicId) }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { null }
             val msgs = if (started == null) {
-                return batch.mapIndexed { idx, (i, h) -> upload(c, i, h) { onProgress(idx, it) } }
-            } else awaitAlbum(started, onProgress)
-            batch.zip(msgs).forEachIndexed { idx, (pair, msg) ->
-                uploadOriginalIfNeeded(c, pair.first, pair.second, msg) { onProgress(idx, it) }
+                batch.mapIndexed { idx, (i, h) -> upload(c, i, h, { onProgress(idx, it) }, chatId, topicId, folder) }
+            } else awaitAlbum(started, onProgress, metas, chatId)
+            if (Prefs.originalPhotos) {
+                val need = batch.zip(msgs).filter { (pair, msg) ->
+                    msg.content is TdApi.MessagePhoto && Db.originalByHash(chatId, pair.second) == null &&
+                        Db.anyByHash(pair.second)?.folder != ORIGINALS_FOLDER
+                }.map { it.first }
+                if (need.isNotEmpty()) uploadOriginalAlbum(c, need, { idx, p -> onProgress(idx, p) }, chatId, topicId)
             }
             return msgs
         } finally { thumbs.forEach { it?.delete() } }
     }
 
-    /** Depois do último item do álbum, marca o nome no canal. */
-    suspend fun sendAlbumMarker(album: String) {
-        val chat = Prefs.chatId
+    /** Depois do último item do tópico/álbum, marca o nome. */
+    suspend fun sendAlbumMarker(album: String, chatId: Long = Prefs.chatId, topicId: Int = 0) {
         Td.send(TdApi.SendMessage().apply {
-            chatId = chat
+            this.chatId = chatId
+            this.topicId = Topics.topic(topicId)
             inputMessageContent = TdApi.InputMessageText().apply { text = TdApi.FormattedText(Meta.albumTitle(album), emptyArray()) }
-            options = TdApi.MessageSendOptions().apply { disableNotification = true }
+            options = sendOpts()
         })
     }
 
-    /** Se a foto foi enviada como mídia e a opção está ligada, envia o arquivo original (resposta). */
+    suspend fun sendSummary(text: String, chatId: Long = Prefs.chatId) {
+        val topic = Topics.generalId(chatId)
+        Td.send(TdApi.SendMessage().apply {
+            this.chatId = chatId
+            this.topicId = Topics.topic(topic)
+            inputMessageContent = TdApi.InputMessageText().apply { this.text = TdApi.FormattedText(text, emptyArray()) }
+            options = sendOpts()
+        }, 20_000)
+    }
+
+    /** Originais das fotos, em álbum de documentos (até 10), logo após o álbum de mídia. Sem legenda e sem resposta. */
+    suspend fun uploadOriginalAlbum(c: Context, batch: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit, chatId: Long, topicId: Int) {
+        val need = batch.filter { Db.originalByHash(chatId, it.second) == null && Db.anyByHash(it.second)?.folder != ORIGINALS_FOLDER }
+        if (need.isEmpty()) return
+        for (chunk in need.chunked(10)) {
+            val thumbs = chunk.map { thumbFor(c, it.first) }
+            try {
+                if (chunk.size == 1) {
+                    val (i, h) = chunk.first()
+                    uploadFile(i.path, i.size, "", thumbs[0], { onProgress(0, it) }, i.mime, c.cacheDir, forceDocument = true, meta = metaOf(i, h, original = true), chatId = chatId, topicId = topicId)
+                    continue
+                }
+                val contents = chunk.mapIndexed { idx, (i, _) -> buildContent(SendKind.DOCUMENT, i.path, "", thumbs[idx]) }
+                val metas = chunk.map { (i, h) -> metaOf(i, h, original = true) }
+                val started = try { startAlbum(contents, chatId, topicId) }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (_: Exception) { null }
+                if (started == null) {
+                    chunk.forEachIndexed { idx, (i, h) ->
+                        uploadFile(i.path, i.size, "", thumbs[idx], { onProgress(idx, it) }, i.mime, c.cacheDir, forceDocument = true, meta = metaOf(i, h, original = true), chatId = chatId, topicId = topicId)
+                    }
+                } else awaitAlbum(started, onProgress, metas, chatId)
+            } finally { thumbs.forEach { it?.delete() } }
+        }
+    }
+
+    /** Mantido pra fotos que já estavam na nuvem sem o arquivo original. */
     suspend fun uploadOriginalIfNeeded(c: Context, i: LocalItem, hash: String, mediaMsg: TdApi.Message, onProgress: (Float) -> Unit) {
         if (!Prefs.originalPhotos) return
         if (mediaMsg.content !is TdApi.MessagePhoto) return
-        if (Db.originalByHash(Prefs.chatId, hash) != null) return
-        val thumb = thumbFor(c, i)
-        try {
-            uploadFile(i.path, i.size, metaOf(i, hash, original = true).toCaption(), thumb, onProgress, i.mime, c.cacheDir, mediaMsg.id, forceDocument = true)
-        } finally { thumb?.delete() }
+        val chat = mediaMsg.chatId
+        if (Db.originalByHash(chat, hash) != null) return
+        uploadOriginalAlbum(c, listOf(i to hash), { _, p -> onProgress(p) }, chat, (mediaMsg.topicId as? TdApi.MessageTopicForum)?.forumTopicId ?: 0)
     }
 
     /** Envio genérico. Se a corrotina for cancelada (botão Parar), cancela o envio no TDLib e apaga a mensagem pendente. */
@@ -310,6 +478,9 @@ object Repo {
         cacheDir: File? = null,
         replyTo: Long = 0L,
         forceDocument: Boolean = false,
+        meta: Meta? = null,
+        chatId: Long = Prefs.chatId,
+        topicId: Int = 0,
     ): TdApi.Message {
         val resolved = mime.ifBlank { Meta.mimeFromName(path) }
         val kind = if (forceDocument) SendKind.DOCUMENT else Meta.sendKind(resolved, size)
@@ -320,11 +491,11 @@ object Repo {
                 generated
             } else null
             return try {
-                sendContent(buildContent(kind, path, caption, useThumb), onProgress, replyTo)
+                sendContent(buildContent(kind, path, caption, useThumb), onProgress, replyTo, meta, chatId, topicId)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
                 if (kind == SendKind.DOCUMENT) throw e
-                sendContent(buildContent(SendKind.DOCUMENT, path, caption, useThumb), onProgress, replyTo)
+                sendContent(buildContent(SendKind.DOCUMENT, path, caption, useThumb), onProgress, replyTo, meta, chatId, topicId)
             }
         } finally { generated?.delete() }
     }
@@ -365,15 +536,18 @@ object Repo {
 
     private fun sendOpts() = TdApi.MessageSendOptions().apply { disableNotification = true }
 
-    private suspend fun startAlbum(contents: List<TdApi.InputMessageContent>): Array<TdApi.Message> {
-        val sent = Td.send(TdApi.SendMessageAlbum().apply { chatId = Prefs.chatId; inputMessageContents = contents.toTypedArray(); options = sendOpts() })
+    private suspend fun startAlbum(contents: List<TdApi.InputMessageContent>, chatId: Long = Prefs.chatId, topicId: Int = 0): Array<TdApi.Message> {
+        val sent = Td.send(TdApi.SendMessageAlbum().apply {
+            this.chatId = chatId; this.topicId = Topics.topic(topicId)
+            inputMessageContents = contents.toTypedArray(); options = sendOpts()
+        })
         val tmps = sent.messages
         if (tmps.isNullOrEmpty()) throw TdException(0, "Álbum vazio")
         return tmps
     }
 
-    private suspend fun awaitAlbum(tmps: Array<TdApi.Message>, onProgress: (Int, Float) -> Unit): List<TdApi.Message> {
-        val chat = Prefs.chatId
+    private suspend fun awaitAlbum(tmps: Array<TdApi.Message>, onProgress: (Int, Float) -> Unit, metas: List<Meta>? = null, chatId: Long = Prefs.chatId): List<TdApi.Message> {
+        val chat = chatId
         val fileIds = tmps.mapNotNull { fileOf(it)?.id }.toSet()
         val job = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
             Td.fileUpdates.collect { f ->
@@ -393,17 +567,19 @@ object Repo {
                 val msg = res.message ?: throw TdException(res.error?.code ?: 0, res.error?.message ?: "Falha no envio do álbum")
                 val r = remoteOf(msg) ?: throw TdException(0, "Mensagem sem mídia")
                 if (!r.file.remote.isUploadingCompleted) throw TdException(0, "Upload incompleto")
-                toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
+                val meta = metas?.getOrNull(out.size)
+                if (meta != null) remember(msg, meta) else toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
                 out += msg
             }
             return out
         } finally { job.cancel() }
     }
 
-    private suspend fun sendContent(content: TdApi.InputMessageContent, onProgress: (Float) -> Unit, replyTo: Long = 0L): TdApi.Message {
-        val chat = Prefs.chatId
+    private suspend fun sendContent(content: TdApi.InputMessageContent, onProgress: (Float) -> Unit, replyTo: Long = 0L, meta: Meta? = null, chatId: Long = Prefs.chatId, topicId: Int = 0): TdApi.Message {
+        val chat = chatId
         val tmp = Td.send(TdApi.SendMessage().apply {
-            chatId = chat; inputMessageContent = content; options = sendOpts()
+            this.chatId = chat; this.topicId = Topics.topic(topicId)
+            inputMessageContent = content; options = sendOpts()
             if (replyTo != 0L) this.replyTo = TdApi.InputMessageReplyToMessage().apply { messageId = replyTo }
         })
         val fileId = fileOf(tmp)?.id ?: -1
@@ -418,7 +594,7 @@ object Repo {
         val msg = res.message ?: throw TdException(res.error?.code ?: 0, res.error?.message ?: "Falha no envio")
         val r = remoteOf(msg) ?: throw TdException(0, "Mensagem sem mídia")
         if (!r.file.remote.isUploadingCompleted) throw TdException(0, "Upload incompleto")
-        toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
+        if (meta != null) remember(msg, meta) else toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
         return msg
     }
 
@@ -434,28 +610,39 @@ object Repo {
     // ---------- Liberar espaço ----------
     /** Estimativa rápida (usa hashes em cache): itens locais cujo hash+tamanho já estão na nuvem. */
     fun freeableQuick(c: Context): Freeable {
-        val chat = Prefs.chatId; if (chat == 0L) return Freeable(emptyList(), 0)
+        if (Prefs.destChats().isEmpty()) return Freeable(emptyList(), 0)
         val items = LocalMedia.all(c).filter { i ->
             val h = Db.cachedHash(i.path, i.size, i.mtime) ?: return@filter false
-            Db.cloudByHash(chat, h)?.size == i.size
+            Db.anyByHash(h, i.size) != null
         }
+        return Freeable(items, items.sumOf { it.size })
+    }
+
+    fun freeableOlderThan(c: Context, days: Int): Freeable {
+        if (days <= 0) return Freeable(emptyList(), 0)
+        val cutoff = System.currentTimeMillis() - days * 86400000L
+        val all = freeableQuick(c)
+        val items = all.items.filter { it.taken in 1 until cutoff || (it.taken <= 0 && it.mtime in 1 until cutoff) }
         return Freeable(items, items.sumOf { it.size })
     }
 
     /** Verificação rigorosa antes de apagar: recalcula hash do arquivo e confere a mensagem no Telegram. */
     suspend fun verifyForDelete(items: List<LocalItem>, onProgress: (Int) -> Unit): List<LocalItem> = withContext(Dispatchers.IO) {
-        val chat = Prefs.chatId
         items.filterIndexed { idx, i ->
             onProgress(idx)
             try {
                 val f = File(i.path); if (!f.exists() || f.length() != i.size) return@filterIndexed false
                 val h = Hash.sha256(f.inputStream())
-                val ci = Db.originalByHash(chat, h) ?: Db.visibleByHash(chat, h) ?: Db.cloudByHash(chat, h) ?: return@filterIndexed false
-                val m = Td.send(TdApi.GetMessage(chat, ci.msgId))
+                val ci = Db.anyByHash(h, i.size) ?: return@filterIndexed false
+                val m = Td.send(TdApi.GetMessage(ci.chatId, ci.msgId), 20_000)
                 val r = remoteOf(m) ?: return@filterIndexed false
                 val meta = Meta.parse(captionOf(m))
-                // Hash e tamanho originais vêm da legenda (foto comprimida pelo Telegram tem outro tamanho remoto).
-                meta?.hash == h && meta.size == i.size && r.file.remote.isUploadingCompleted && r.file.remote.id.isNotEmpty()
+                val match = when {
+                    meta != null -> meta.hash == h && meta.size == i.size
+                    ci.hash == h && ci.size == i.size -> true
+                    else -> false
+                }
+                match && r.file.remote.isUploadingCompleted && r.file.remote.id.isNotEmpty()
             } catch (_: Exception) { false }
         }
     }
@@ -484,13 +671,20 @@ object Repo {
         if (orig != null) Db.deleteCloud(orig.chatId, orig.msgId)
     }
 
-    /** Restaura para o celular em Pictures/Nuvem ou Movies/Nuvem. */
+    fun restoreRelativePath(ci: CloudItem): String {
+        val fromMeta = ci.path.substringBeforeLast('/').trim('/').ifBlank { "" }
+        if (fromMeta.isNotBlank() && !fromMeta.startsWith("/")) return fromMeta + "/"
+        val base = if (ci.isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+        return "$base/Nuvem/${ci.folder.ifBlank { "Outros" }}/"
+    }
+
+    /** Restaura para a pasta original, se soubermos; senão Pictures/Movies/Nuvem/álbum. */
     suspend fun restore(c: Context, ci: CloudItem): Boolean = withContext(Dispatchers.IO) {
         val src = fullPath(ci) ?: return@withContext false
         val video = ci.isVideo
         val cv = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, ci.name); put(MediaStore.MediaColumns.MIME_TYPE, ci.mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, (if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES) + "/Nuvem")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, restoreRelativePath(ci))
             put(MediaStore.MediaColumns.DATE_TAKEN, ci.taken); put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val coll = if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -499,4 +693,153 @@ object Repo {
         c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
         true
     }
+
+    suspend fun restoreAlbum(c: Context, folder: String, onProgress: ((Int, Int) -> Unit)? = null): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val items = Db.allCloudMany(Prefs.galleryChats() + listOf(Prefs.secretChatId).filter { it != 0L }).filter { it.folder == folder }
+        var ok = 0
+        items.forEachIndexed { i, ci ->
+            onProgress?.invoke(i, items.size)
+            if (try { restore(c, ci) } catch (_: Exception) { false }) ok++
+        }
+        ok to items.size
+    }
+
+    // ---------- Índice invisível de metadados ----------
+    suspend fun findIndexMessage(chat: Long): TdApi.Message? {
+        val known = Prefs.indexId(chat)
+        if (known != 0L) {
+            try {
+                val m = Td.send(TdApi.GetMessage(chat, known), 15_000)
+                if (isIndexMessage(m)) return m
+            } catch (_: Exception) {}
+        }
+        try {
+            val found = Td.send(TdApi.SearchChatMessages().apply {
+                chatId = chat
+                query = Meta.INDEX_FILE
+                fromMessageId = 0
+                offset = 0
+                limit = 20
+                filter = TdApi.SearchMessagesFilterDocument()
+            }, 20_000)
+            found.messages?.firstOrNull { isIndexMessage(it) }?.let { return it }
+        } catch (_: Exception) {}
+        return null
+    }
+
+    suspend fun pullIndex(chat: Long) {
+        val msg = findIndexMessage(chat) ?: return
+        Prefs.setIndexId(chat, msg.id)
+        val f = fileOf(msg) ?: return
+        val path = Td.send(TdApi.DownloadFile(f.id, 32, 0, 0, true), 60_000).local.path.ifBlank { return }
+        val recs = Meta.unpackIndex(File(path).readText())
+        if (recs.isEmpty()) return
+        for (r in recs) {
+            val folder = when {
+                r.meta.original -> ORIGINALS_FOLDER
+                r.meta.folder.isNotBlank() -> r.meta.folder
+                else -> "Outros"
+            }
+            val existing = Db.getCloud(chat, r.msgId)
+            Db.putCloud(CloudItem(r.msgId, chat, r.meta.name, r.meta.mime, r.meta.size, r.meta.taken, folder, r.meta.path, r.meta.hash, existing?.mini))
+        }
+        Db.bump()
+    }
+
+    suspend fun pushIndex(chat: Long = Prefs.chatId) {
+        if (chat == 0L) return
+        val items = Db.allForIndex(chat)
+        val dir = File(Td.filesDir(), "index").apply { mkdirs() }
+        val f = File(dir, Meta.INDEX_FILE)
+        f.writeText(Meta.packIndex(items))
+        val topic = Topics.generalId(chat)
+        val content = TdApi.InputMessageDocument().apply {
+            document = TdApi.InputDocument().apply {
+                document = TdApi.InputFileLocal(f.absolutePath)
+                disableContentTypeDetection = true
+            }
+            caption = TdApi.FormattedText("", emptyArray())
+        }
+        val msg = try {
+            Td.send(TdApi.SendMessage().apply {
+                chatId = chat
+                topicId = Topics.topic(topic)
+                inputMessageContent = content
+                options = sendOpts()
+            }, 60_000)
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: Exception) {
+            f.delete(); throw e
+        }
+        val sent = try { Td.awaitSend(msg.id) } catch (e: Exception) { f.delete(); throw e }
+        val done = sent.message ?: run { f.delete(); return }
+        try { Td.send(TdApi.PinChatMessage(chat, done.id, true, false), 15_000) } catch (_: Exception) {}
+        val old = Prefs.indexId(chat)
+        Prefs.setIndexId(chat, done.id)
+        if (old != 0L && old != done.id) {
+            try { Td.send(TdApi.DeleteMessages(chat, longArrayOf(old), true), 15_000) } catch (_: Exception) {}
+        }
+        f.delete()
+    }
+
+    /**
+     * Remove legendas antigas "#nuvem v1" (edita no Telegram) e deixa só a hashtag curta.
+     * Salva os metadados no banco e atualiza o índice antes de apagar o texto enorme.
+     */
+    suspend fun clearOldCaptions(onProgress: ((Int, Int) -> Unit)? = null): Int = withContext(Dispatchers.IO) {
+        ensureDestination()
+        var cleaned = 0; var scanned = 0
+        for (chat in Prefs.destChats()) {
+            try { pullIndex(chat) } catch (_: Exception) {}
+            val topics = try { Topics.list(chat) } catch (_: Exception) { emptyList() }
+            val topicIds = if (topics.isEmpty()) listOf(0) else topics.map { it.forumTopicId }
+            for (topicId in topicIds) {
+                var from = 0L; var emptyRounds = 0; var pages = 0
+                while (true) {
+                    val r = try {
+                        if (topicId != 0) Td.send(TdApi.GetForumTopicHistory(chat, topicId, from, 0, 100), 20_000)
+                        else Td.send(TdApi.GetChatHistory().apply { chatId = chat; fromMessageId = from; offset = 0; limit = 100; onlyLocal = false }, 20_000)
+                    } catch (e: TdException) {
+                        if (e.code == 408 && from == 0L && pages == 0) break
+                        throw e
+                    }
+                    val msgs = r.messages ?: emptyArray()
+                    for (m in msgs) {
+                        scanned++
+                        val cap = captionOf(m) ?: continue
+                        if (!Meta.hasLegacyCaption(cap)) continue
+                        val item = toCloud(m)
+                        item?.let { Db.putCloud(it); Db.bump() }
+                        val capNew = if (item != null) Classify.shortCaption(item.taken, item.folder, item.folder == ORIGINALS_FOLDER) else ""
+                        try {
+                            Td.send(TdApi.EditMessageCaption().apply {
+                                chatId = chat; messageId = m.id
+                                caption = TdApi.FormattedText(capNew, emptyArray())
+                            }, 20_000)
+                            cleaned++
+                        } catch (e: kotlinx.coroutines.CancellationException) { throw e
+                        } catch (e: TdException) {
+                            if (e.code == 429) {
+                                kotlinx.coroutines.delay(3_000)
+                                try {
+                                    Td.send(TdApi.EditMessageCaption().apply {
+                                        chatId = chat; messageId = m.id
+                                        caption = TdApi.FormattedText(capNew, emptyArray())
+                                    }, 20_000)
+                                    cleaned++
+                                } catch (_: Exception) {}
+                            }
+                        } catch (_: Exception) {}
+                        onProgress?.invoke(cleaned, scanned)
+                    }
+                    val s = ChatHistoryWalk.next(from, emptyRounds, msgs.map { it.id }.toLongArray(), true, 0, pages)
+                    from = s.nextFromId; emptyRounds = s.emptyRounds; pages = s.pages
+                    if (s.done) break
+                }
+            }
+            try { pushIndex(chat) } catch (_: Exception) {}
+        }
+        cleaned
+    }
+
 }

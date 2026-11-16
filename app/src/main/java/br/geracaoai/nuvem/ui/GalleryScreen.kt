@@ -45,10 +45,11 @@ private val dayFmt = SimpleDateFormat("EEE, d 'de' MMM 'de' yyyy", Locale("pt", 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(folder: String?, onOpen: (List<CloudItem>, Int) -> Unit) {
+    val ctx = LocalContext.current
     val ver by Db.version.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var all by remember { mutableStateOf<List<CloudItem>>(emptyList()) }
-    LaunchedEffect(ver, folder) { all = withContext(Dispatchers.IO) { Db.allCloud(Prefs.chatId).filter { folder == null || it.folder == folder } } }
+    LaunchedEffect(ver, folder) { all = withContext(Dispatchers.IO) { Db.allCloudMany(Prefs.galleryChats()).filter { folder == null || it.folder == folder } } }
     val items = remember(all, query) {
         if (query.isBlank()) all else { val q = query.lowercase(); all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() } }
     }
@@ -71,8 +72,21 @@ fun GalleryScreen(folder: String?, onOpen: (List<CloudItem>, Int) -> Unit) {
             if (folder == null) {
                 albums.forEach { (album, albumItems) ->
                     item(span = { GridItemSpan(maxLineSpan) }, key = "a$album") {
-                        Text("📁 $album", Modifier.padding(start = 12.dp, top = 16.dp, bottom = 4.dp),
-                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        val scope = rememberCoroutineScope()
+                        var restoring by remember { mutableStateOf(false) }
+                        var restoreMsg by remember { mutableStateOf<String?>(null) }
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, end = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("📁 $album", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            TextButton(enabled = !restoring, onClick = {
+                                restoring = true
+                                scope.launch {
+                                    val (ok, total) = try { Repo.restoreAlbum(ctx, album) } catch (_: Exception) { 0 to albumItems.size }
+                                    restoreMsg = "Restaurados $ok de $total na pasta original (ou em Nuvem/$album)."
+                                    restoring = false
+                                }
+                            }) { Text(if (restoring) "Restaurando…" else "Restaurar álbum") }
+                        }
+                        restoreMsg?.let { msg -> AlertDialog({ restoreMsg = null }, confirmButton = { TextButton({ restoreMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
                     }
                     albumItems.groupBy { dayFmt.format(Date(it.taken)) }.forEach { (day, list) ->
                         item(span = { GridItemSpan(maxLineSpan) }, key = "h$album$day") {

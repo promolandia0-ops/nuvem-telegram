@@ -31,6 +31,10 @@ object Td {
     val isPremium = MutableStateFlow(false)
     private val sends = ConcurrentHashMap<Long, CompletableDeferred<SendResult>>()
 
+    fun filesDir(): File = app.filesDir
+    fun cacheDir(): File = app.cacheDir
+    fun appCtx(): Context = app
+
     fun init(ctx: Context) {
         app = ctx.applicationContext
         if (client != null) return
@@ -68,7 +72,7 @@ object Td {
             useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
             apiId = id; apiHash = hash
             systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.3.1"
+            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.4.0"
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }

@@ -1,5 +1,6 @@
 package br.geracaoai.nuvem.data
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Metadados gravados na legenda de cada arquivo enviado. */
@@ -20,6 +21,42 @@ data class Meta(
 
     companion object {
         const val TAG = "#nuvem v1 "
+        const val INDEX_FILE = ".nuvem-index.json"
+        fun hasLegacyCaption(caption: String?) = !caption.isNullOrBlank() && TAG in caption
+        fun isIndexName(name: String?) = !name.isNullOrBlank() && (name == INDEX_FILE || name.endsWith(INDEX_FILE))
+
+        fun toObj(hash: String, size: Long, taken: Long, name: String, mime: String, folder: String, path: String, original: Boolean = false) =
+            JSONObject().put("h", hash).put("s", size).put("t", taken).put("n", name)
+                .put("m", mime).put("f", folder).put("p", path.take(300)).also { if (original) it.put("k", "orig") }
+
+        fun fromObj(j: JSONObject) = Meta(j.getString("h"), j.getLong("s"), j.optLong("t"), j.optString("n"),
+            j.optString("m"), j.optString("f"), j.optString("p"), j.optString("k") == "orig")
+
+        fun packIndex(items: List<CloudItem>): String {
+            val arr = JSONArray()
+            for (i in items) {
+                val o = toObj(i.hash, i.size, i.taken, i.name, i.mime, if (i.folder == ORIGINALS_FOLDER) "" else i.folder, i.path, i.folder == ORIGINALS_FOLDER)
+                o.put("i", i.msgId)
+                if (i.folder == WATCHED_FOLDER) o.put("f", WATCHED_FOLDER)
+                arr.put(o)
+            }
+            return JSONObject().put("v", 2).put("items", arr).toString()
+        }
+
+        data class IndexRec(val msgId: Long, val meta: Meta)
+
+        fun unpackIndex(text: String): List<IndexRec> = try {
+            val root = JSONObject(text)
+            val arr = root.optJSONArray("items") ?: JSONArray()
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optLong("i")
+                    if (id != 0L) add(IndexRec(id, fromObj(o)))
+                }
+            }
+        } catch (_: Exception) { emptyList() }
+
         /** Limite de tamanho do Telegram: 2 GB (4 GB com Premium). */
         fun maxSize(premium: Boolean): Long = if (premium) 4000L * 1024 * 1024 else 2000L * 1024 * 1024
         /** Acima de 2 GB o Telegram só aceita documento (e só com Premium). */
