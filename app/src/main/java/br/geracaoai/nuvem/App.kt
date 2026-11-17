@@ -3,7 +3,9 @@ package br.geracaoai.nuvem
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import br.geracaoai.nuvem.data.ActionLog
 import br.geracaoai.nuvem.data.Db
+import br.geracaoai.nuvem.data.FailStore
 import br.geracaoai.nuvem.data.Prefs
 import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.work.Backup
@@ -13,6 +15,7 @@ class App : Application() {
         super.onCreate()
         Prefs.init(this)
         Db.init(this)
+        ActionLog.load(); FailStore.load()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(Backup.CHANNEL, "Backup", NotificationManager.IMPORTANCE_LOW))
         getSystemService(NotificationManager::class.java).createNotificationChannel(

@@ -40,6 +40,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import br.geracaoai.nuvem.data.*
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -210,12 +211,16 @@ private val thumbCache = Collections.synchronizedMap(object : LinkedHashMap<Long
 
 @Composable
 fun Thumb(ci: CloudItem, modifier: Modifier) {
-    val path by produceState(thumbCache[ci.msgId], ci.msgId) { if (value == null) value = Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
-    val mini = remember(ci.msgId) { ci.mini?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
+    val ctx = LocalContext.current
+    val path by produceState(thumbCache[ci.msgId], ci.msgId) {
+        if (value == null) value = withContext(Dispatchers.IO) { Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
+    }
     Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f))) {
-        if (mini != null) Image(mini, null, Modifier.fillMaxSize().blur(8.dp), contentScale = ContentScale.Crop)
-        AnimatedVisibility(path != null, enter = fadeIn()) { AsyncImage(path?.let { File(it) }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-        if (path == null && mini == null) Icon(if (ci.isVideo) Icons.Rounded.Movie else Icons.Rounded.Image, null, Modifier.align(Alignment.Center), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        AnimatedVisibility(path != null, enter = fadeIn()) {
+            val req = ImageRequest.Builder(ctx).data(path?.let { File(it) }).size(280).crossfade(true).build()
+            AsyncImage(req, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+        if (path == null) Icon(if (ci.isVideo) Icons.Rounded.Movie else Icons.Rounded.Image, null, Modifier.align(Alignment.Center), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         if (ci.isVideo) Icon(Icons.Rounded.PlayCircle, null, Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp), tint = Color.White)
     }
 }
@@ -245,7 +250,11 @@ fun FreeUpCard() {
     var verified by remember { mutableStateOf<List<LocalItem>>(emptyList()) }
     var result by remember { mutableStateOf<String?>(null) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
-        result = if (r.resultCode == Activity.RESULT_OK) "Pronto! ${fmtBytes(verified.sumOf { it.size })} liberados. Tudo continua na sua nuvem." else "Nada foi apagado."
+        if (r.resultCode == Activity.RESULT_OK) {
+            val bytes = verified.sumOf { it.size }
+            ActionLog.add("lixeira", "Moveu ${verified.size} itens já conferidos no Telegram para a lixeira do celular", verified.size, bytes)
+            result = "Pronto! ${fmtBytes(bytes)} foram para a lixeira do celular (dá pra recuperar por cerca de 30 dias). Tudo continua na sua nuvem."
+        } else result = "Nada foi apagado."
         refresh++
     }
     val f = free
@@ -277,15 +286,16 @@ fun FreeUpCard() {
     if (phase == "confirm" && f != null) {
         val skipped = f.items.size - verified.size
         AlertDialog({ phase = null },
-            title = { Text(if (verified.isEmpty()) "Nada para liberar" else "Apagar ${verified.size} itens do celular?") },
+            title = { Text(if (verified.isEmpty()) "Nada para liberar" else "Mover ${verified.size} itens para a lixeira?") },
             text = { Text(if (verified.isEmpty()) "Nenhum arquivo passou na verificação. Nada será apagado." else
-                "Serão removidos só deste celular (${fmtBytes(verified.sumOf { it.size })}). As cópias originais continuam no seu Telegram e podem ser restauradas a qualquer momento." +
-                (if (skipped > 0) "\n\n$skipped itens não passaram na verificação e NÃO serão apagados." else "")) },
+                "Vão para a lixeira do celular (${fmtBytes(verified.sumOf { it.size })}), onde dá pra recuperar por cerca de 30 dias. Só saem itens que acabei de conferir no Telegram (arquivo e tamanho). Nada é apagado de vez, e nada some da nuvem." +
+                (if (skipped > 0) "\n\n$skipped itens não passaram na verificação e NÃO serão movidos." else "")) },
             confirmButton = { if (verified.isNotEmpty()) Button({
                 phase = null
-                val req = MediaStore.createDeleteRequest(ctx.contentResolver, verified.map { it.uri })
-                launcher.launch(IntentSenderRequest.Builder(req.intentSender).build())
-            }) { Text("Liberar") } },
+                val sender = SafeTrash.intent(ctx, verified.map { it.uri })
+                if (sender != null) launcher.launch(IntentSenderRequest.Builder(sender).build())
+                else result = "Não foi possível abrir a lixeira do celular. Nada foi apagado."
+            }) { Text("Mover para a lixeira") } },
             dismissButton = { TextButton({ phase = null }) { Text("Cancelar") } })
     }
     result?.let { AlertDialog({ result = null }, confirmButton = { TextButton({ result = null }) { Text("OK") } }, text = { Text(it) }) }

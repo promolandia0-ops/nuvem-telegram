@@ -255,6 +255,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
         var done = 0; var sentPhotos = 0; var sentVideos = 0; var sentDocs = 0; var sentBytes = 0L
         val seen = HashSet<String>()
+        val deferred = ArrayList<DeferredUpload>()
         val runStarted = Checkpoint.load()?.startedAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
 
         fun loadFolder(name: String): List<LocalItem> =
@@ -344,9 +345,10 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         keep.acquire()
                         var last = -1
                         var tries = 0
+                        var result = UploadResult()
                         while (true) {
                             try {
-                                Repo.uploadGroup(applicationContext, chunk, { i, p ->
+                                result = Repo.uploadGroup(applicationContext, chunk, { i, p ->
                                     val pct = (p * 100).toInt()
                                     if (pct != last) {
                                         last = pct
@@ -357,19 +359,32 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                             } catch (e: CancellationException) { throw e }
                             catch (e: Exception) {
                                 if (isCancel(e) || Prefs2.backupPaused || isStopped) throw e
-                                if (!StallPolicy.shouldRetry(tries)) throw e
+                                if (ImageProcess.isFailed(e)) {
+                                    result = UploadResult(deferred = chunk.map { (i, h) -> DeferredUpload(i, h, e.message ?: "Falha no envio", album, chat, topicId) })
+                                    break
+                                }
+                                if (!StallPolicy.shouldRetry(tries)) {
+                                    result = UploadResult(deferred = chunk.map { (i, h) -> DeferredUpload(i, h, e.message ?: "Falha no envio", album, chat, topicId) })
+                                    break
+                                }
                                 tries++
                                 delay(StallPolicy.backoffMs(tries))
                             }
                         }
-                        for ((item, _) in chunk) {
-                            when {
-                                item.mime.startsWith("image/") -> sentPhotos++
-                                item.mime.startsWith("video/") -> sentVideos++
-                                else -> sentDocs++
+                        deferred += result.deferred
+                        val sentHashes = result.sent.map { it.second }.toHashSet()
+                        for ((item, h) in chunk) {
+                            if (h in sentHashes) {
+                                when {
+                                    item.mime.startsWith("image/") -> sentPhotos++
+                                    item.mime.startsWith("video/") -> sentVideos++
+                                    else -> sentDocs++
+                                }
+                                sentBytes += item.size
+                                sentInFolder++
+                                if (h.isNotBlank()) FailStore.remove(h)
                             }
-                            sentBytes += item.size
-                            done++; folderDone++; sentInFolder++
+                            done++; folderDone++
                             Checkpoint.mark(album, done, total, Checkpoint.itemKey(item.path, item.size, item.mtime), runStarted)
                         }
                         report(done, total, "$album • $folderDone de $folderTotal • ${chunk.last().first.name}", 100)
@@ -418,11 +433,37 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             Checkpoint.mark(Checkpoint.load()?.folder ?: "", done, total, startedAt = runStarted)
             return Result.success()
         }
+        if (deferred.isNotEmpty()) {
+            report(done, total, "Tentando de novo ${deferred.size} que falharam…", 0)
+            val still = try {
+                Repo.retryDeferred(applicationContext, deferred) { i, n, name ->
+                    report(done, total, "Tentando de novo $i de $n • $name", ((i * 100f) / n).toInt())
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (isCancel(e) || Prefs2.backupPaused || isStopped) throw e
+                deferred
+            }
+            val recovered = deferred.filter { d -> still.none { it.hash == d.hash && it.item.path == d.item.path } }
+            for (d in recovered) {
+                when {
+                    d.item.mime.startsWith("image/") -> sentPhotos++
+                    d.item.mime.startsWith("video/") -> sentVideos++
+                    else -> sentDocs++
+                }
+                sentBytes += d.item.size
+                FailStore.remove(d.hash)
+            }
+            if (still.isNotEmpty()) FailStore.addAll(still.map { FailStore.fromDeferred(it, 2) })
+            else deferred.forEach { FailStore.remove(it.hash) }
+        }
+        val leftover = FailStore.items.value
         val summary = backupSummary(sentPhotos, sentVideos, sentDocs, sentBytes)
         if (sentPhotos + sentVideos + sentDocs > 0) try { Repo.sendSummary(summary, main.id) } catch (_: Exception) {}
         try { Repo.pushIndex(main.id) } catch (_: Exception) {}
         if (secretChat != 0L) try { Repo.pushIndex(secretChat) } catch (_: Exception) {}
-        Prefs.lastBackup = System.currentTimeMillis(); Prefs.lastError = ""
+        Prefs.lastBackup = System.currentTimeMillis()
+        Prefs.lastError = if (leftover.isNotEmpty()) "Alguns arquivos não foram enviados. Veja Falharam." else ""
         Checkpoint.clear()
         return Result.success(workDataOf("sent" to (sentPhotos + sentVideos + sentDocs), "summary" to summary))
     }

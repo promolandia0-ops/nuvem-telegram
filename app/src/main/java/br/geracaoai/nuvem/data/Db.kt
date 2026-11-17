@@ -59,7 +59,7 @@ object Db {
         }
     fun clearCloud(chatId: Long) { db.delete("cloud", "chat_id=?", arrayOf("$chatId")); bump() }
     fun hasMsg(chatId: Long, msgId: Long) = db.rawQuery("SELECT 1 FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { it.moveToFirst() }
-    fun getCloud(chatId: Long, msgId: Long): CloudItem? = query("chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).firstOrNull()
+    fun getCloud(chatId: Long, msgId: Long): CloudItem? = query("chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId"), includeMini = true).firstOrNull()
     /** Todos os itens do canal, inclusive originais e assistidos (para o índice). */
     fun allForIndex(chatId: Long): List<CloudItem> = query("chat_id=?", arrayOf("$chatId"))
 
@@ -71,6 +71,15 @@ object Db {
         if (hash.isBlank()) return null
         return if (size != null && size > 0) query("hash=? AND size=?", arrayOf(hash, "$size")).firstOrNull()
         else query("hash=?", arrayOf(hash)).firstOrNull()
+    }
+    fun anyByHashInChat(chatId: Long, hash: String, size: Long? = null): CloudItem? {
+        if (hash.isBlank() || chatId == 0L) return null
+        return if (size != null && size > 0) query("chat_id=? AND hash=? AND size=?", arrayOf("$chatId", hash, "$size")).firstOrNull()
+        else query("chat_id=? AND hash=?", arrayOf("$chatId", hash)).firstOrNull()
+    }
+    fun anyByNameSizeInChat(chatId: Long, name: String, size: Long): CloudItem? {
+        if (name.isBlank() || name == "item" || size <= 0 || chatId == 0L) return null
+        return query("chat_id=? AND name=? AND size=?", arrayOf("$chatId", name, "$size")).firstOrNull()
     }
     fun allCloudMany(chatIds: List<Long>): List<CloudItem> =
         chatIds.filter { it != 0L }.distinct().flatMap { allCloud(it) }.sortedByDescending { it.taken }
@@ -85,12 +94,26 @@ object Db {
     fun seen(k: String) = db.rawQuery("SELECT 1 FROM watched_seen WHERE k=?", arrayOf(k)).use { it.moveToFirst() }
     fun markSeen(k: String) { db.insertWithOnConflict("watched_seen", null, ContentValues().apply { put("k", k); put("at", System.currentTimeMillis()) }, SQLiteDatabase.CONFLICT_REPLACE) }
 
-    private fun query(where: String, args: Array<String>): List<CloudItem> =
-        db.query("cloud", null, where, args, null, null, "taken DESC, msg_id DESC").use { c ->
-            buildList { while (c.moveToNext()) add(CloudItem(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getLong(4),
-                c.getLong(5), c.getString(6), c.getString(7), c.getString(8), c.getBlob(9),
-                if (c.columnCount > 10) c.getString(10) ?: "" else "")) }
+    private val liteCols = arrayOf("msg_id", "chat_id", "name", "mime", "size", "taken", "folder", "path", "hash", "uniq")
+    private fun query(where: String, args: Array<String>, includeMini: Boolean = false): List<CloudItem> {
+        val cols = if (includeMini) null else liteCols
+        return db.query("cloud", cols, where, args, null, null, "taken DESC, msg_id DESC").use { c ->
+            val iMsg = c.getColumnIndex("msg_id"); val iChat = c.getColumnIndex("chat_id")
+            val iName = c.getColumnIndex("name"); val iMime = c.getColumnIndex("mime")
+            val iSize = c.getColumnIndex("size"); val iTaken = c.getColumnIndex("taken")
+            val iFolder = c.getColumnIndex("folder"); val iPath = c.getColumnIndex("path")
+            val iHash = c.getColumnIndex("hash"); val iMini = c.getColumnIndex("mini"); val iUniq = c.getColumnIndex("uniq")
+            buildList {
+                while (c.moveToNext()) add(CloudItem(
+                    c.getLong(iMsg), c.getLong(iChat), c.getString(iName) ?: "", c.getString(iMime) ?: "",
+                    c.getLong(iSize), c.getLong(iTaken), c.getString(iFolder) ?: "", c.getString(iPath) ?: "",
+                    c.getString(iHash) ?: "", if (includeMini && iMini >= 0) c.getBlob(iMini) else null,
+                    if (iUniq >= 0) c.getString(iUniq) ?: "" else "",
+                ))
+            }
         }
+    }
+
 
     /** Cache de hash de arquivos locais (path+tamanho+mtime) para não recalcular. */
     fun cachedHash(path: String, size: Long, mtime: Long): String? =

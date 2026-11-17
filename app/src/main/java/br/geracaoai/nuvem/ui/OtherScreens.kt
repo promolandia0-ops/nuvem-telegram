@@ -95,6 +95,8 @@ fun SettingsScreen(onLogout: () -> Unit) {
     var emailInfo by remember { mutableStateOf<TdApi.EmailAddressAuthenticationCodeInfo?>(null) }
     var emailErr by remember { mutableStateOf<String?>(null) }
     var emailBusy by remember { mutableStateOf(false) }
+    var destConfirm by remember { mutableStateOf(false) }
+    var destResend by remember { mutableStateOf(false) }
     val premium by Td.isPremium.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         try {
@@ -107,7 +109,7 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item {
             SectionTitle("Conta")
             GlassCard(padding = 8.dp) {
-                SettingsLine(Icons.Rounded.Cloud, "Destino", Prefs.chatTitle.ifBlank { "—" } + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo")
+                SettingsLine(Icons.Rounded.Cloud, "Destino", (Prefs.chatTitle.ifBlank { "—" }) + " • " + DestKind.label(DestKind.effective()) + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo") { destConfirm = true; destResend = false }
                 SettingsLine(Icons.Rounded.Email, "E-mail de login", if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.", onClick = { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" })
                 SettingsLine(Icons.Rounded.PhoneAndroid, "Sessão neste celular", "Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.")
             }
@@ -149,12 +151,27 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item {
             SectionTitle("Sessão")
             GlassCard(padding = 8.dp) {
-                SettingsLine(Icons.Rounded.SwapHoriz, "Trocar destino", "Escolher outro grupo, canal ou Mensagens Salvas") { Prefs.clearDest(); onLogout() }
+                SettingsLine(Icons.Rounded.SwapHoriz, "Trocar destino", "Escolher outro grupo, grupo com tópicos, canal ou Mensagens Salvas") { destConfirm = true; destResend = false }
                 SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.") { confirmOut = true }
             }
         }
-        item { Text("Nuvem 1.6.0 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
+        item { Text("Nuvem 1.6.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
     }
+    if (destConfirm) AlertDialog(
+        { destConfirm = false },
+        title = { Text("Trocar destino?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Os arquivos que já foram enviados (neste ou em outro grupo, canal ou nas Mensagens Salvas) não serão reenviados, a menos que você marque a opção abaixo. O app reconhece o arquivo e só sobe o que ainda não está na sua conta.")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { destResend = !destResend }) {
+                    Checkbox(destResend, { destResend = it })
+                    Text("Reenviar também o que já está em outro destino", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { Button({ Prefs.resendExisting = destResend; destConfirm = false; Prefs.clearDest(); onLogout() }) { Text("Continuar") } },
+        dismissButton = { TextButton({ destConfirm = false }) { Text("Cancelar") } },
+    )
     if (emailDlg) AlertDialog({ emailDlg = false }, title = { Text("E-mail de login") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -320,14 +337,15 @@ fun DupCleanRow() {
         val p = plan!!
         AlertDialog(
             { confirm = false },
-            title = { Text("Apagar duplicadas?") },
-            text = { Text("${p.preview}. Fica só a cópia mais antiga de cada um, e o arquivo original da foto se existir. Isso apaga as outras mensagens no Telegram.") },
+            title = { Text("Apagar duplicadas no Telegram?") },
+            text = { Text("${p.preview}. Fica só a cópia mais antiga de cada um, e o arquivo original da foto se existir. Isso apaga as outras mensagens no Telegram de forma permanente (não vai para a lixeira do celular). Confirme só se tiver certeza.") },
             confirmButton = {
                 Button({
                     confirm = false; deleting = true; progress = "Apagando…"
                     scope.launch {
                         try {
                             val n = withContext(Dispatchers.IO) { Repo.deleteDuplicates(p) { d, t -> progress = "Apagando $d de $t" } }
+                            ActionLog.add("duplicadas", "Apagou $n mensagens duplicadas no Telegram (permanente). Ficou a cópia mais antiga.", n, 0)
                             result = "Apagadas $n duplicadas."
                             plan = null; scanHint = null
                         } catch (e: Exception) { result = traduz(e.message) }

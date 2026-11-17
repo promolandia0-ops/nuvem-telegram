@@ -46,11 +46,15 @@ object Prefs {
         j.put("$chat", id)
         p.edit().putString("index_map", j.toString()).apply()
     }
+    /** group | forum | channel | saved. Vazio = ainda não escolheu (padrão: grupo). */
+    var destKind: String get() = p.getString("dest_kind", "")!!; set(v) = p.edit().putString("dest_kind", v).apply()
+    /** Se true, alreadyOnCloud só considera o destino atual (reenviar o que está em outro chat). */
+    var resendExisting: Boolean get() = p.getBoolean("resend_existing", false); set(v) = p.edit().putBoolean("resend_existing", v).apply()
     var knownChats: Set<String> get() = p.getStringSet("known_chats", emptySet())!!; set(v) = p.edit().putStringSet("known_chats", v).apply()
     fun rememberChat(id: Long) { if (id != 0L) knownChats = knownChats + id.toString() }
     fun destChats(): List<Long> = listOf(chatId, legacyChatId, secretChatId).filter { it != 0L }.distinct()
     fun allKnownChats(): List<Long> = (destChats() + knownChats.mapNotNull { it.toLongOrNull() }).filter { it != 0L }.distinct()
-    fun clearDest() { if (chatId != 0L) rememberChat(chatId); chatId = 0; chatTitle = ""; indexMsgId = 0; topicMap = "" }
+    fun clearDest() { if (chatId != 0L) rememberChat(chatId); chatId = 0; chatTitle = ""; indexMsgId = 0; topicMap = ""; destKind = destKind }
     fun clearAccount() { clearDest(); secretChatId = 0; secretFolders = emptySet(); knownChats = emptySet(); legacyChatId = 0 }
     fun setTheme(v: Int) { p.edit().putInt("theme", v).apply(); theme.value = v }
 }

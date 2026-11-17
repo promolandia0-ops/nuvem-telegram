@@ -170,6 +170,7 @@ fun BackupScreen(
             }
         }
         item(key = "batt") { SamsungBatteryCard() }
+        item(key = "fail") { FailedUploadsCard() }
         item(key = "short") {
             GlassCard(radius = 24.dp, padding = 12.dp) {
                 val items = listOf(
@@ -291,6 +292,25 @@ private fun Mosaic(covers: List<CloudItem>, secret: Boolean) {
     }
 }
 
+@Composable
+fun FailedUploadsCard() {
+    val ctx = LocalContext.current
+    val failed by FailStore.items.collectAsStateWithLifecycle()
+    if (failed.isEmpty()) return
+    GlassCard(radius = 24.dp, padding = 16.dp) {
+        Text("Falharam", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = Nv.Rose)
+        Spacer(Modifier.height(6.dp))
+        Text("${failed.size} arquivo${if (failed.size == 1) "" else "s"} não ${if (failed.size == 1) "foi enviado" else "foram enviados"}. Não ${if (failed.size == 1) "conta" else "contam"} como backup.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(8.dp))
+        failed.take(8).forEach { f ->
+            Text("• ${f.name}  ${traduz(f.error)}", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (failed.size > 8) Text("+${failed.size - 8} outros", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        PillButton("Tentar de novo", Icons.Rounded.CloudUpload, { Backup.runNow(ctx, true) })
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
@@ -298,6 +318,16 @@ private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
     var msg by remember { mutableStateOf<String?>(null) }
+    var pending by remember { mutableStateOf<String?>(null) }
+    fun doRestore(name: String) {
+        busy = name
+        scope.launch {
+            val (ok, total) = try { Repo.restoreAlbum(ctx, name) } catch (_: Exception) { 0 to 0 }
+            ActionLog.add("restaurar", "Restaurou $ok de $total em ${folderLabel(name)}", ok, 0)
+            msg = "Restaurados $ok de $total em ${folderLabel(name)}."
+            busy = null
+        }
+    }
     ModalBottomSheet(onClose) {
         Column(Modifier.padding(20.dp).navigationBarsPadding()) {
             Text("Restaurar álbum", style = MaterialTheme.typography.titleLarge)
@@ -307,14 +337,7 @@ private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
             albums.forEach { name ->
                 ListItem(
                     headlineContent = { Text(folderLabel(name)) },
-                    trailingContent = { TextButton(enabled = busy == null, onClick = {
-                        busy = name
-                        scope.launch {
-                            val (ok, total) = try { Repo.restoreAlbum(ctx, name) } catch (_: Exception) { 0 to 0 }
-                            msg = "Restaurados $ok de $total em ${folderLabel(name)}."
-                            busy = null
-                        }
-                    }) { Text(if (busy == name) "Restaurando…" else "Restaurar") } },
+                    trailingContent = { TextButton(enabled = busy == null, onClick = { pending = name }) { Text(if (busy == name) "Restaurando…" else "Restaurar") } },
                     modifier = Modifier.clip(RoundedCornerShape(12.dp))
                 )
             }
@@ -322,6 +345,14 @@ private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
             Spacer(Modifier.height(12.dp))
         }
     }
+    val name = pending
+    if (name != null) AlertDialog(
+        { pending = null },
+        title = { Text("Restaurar ${folderLabel(name)}?") },
+        text = { Text("Os arquivos voltam para a pasta original do celular. Nada é apagado da nuvem.") },
+        confirmButton = { Button({ pending = null; doRestore(name) }) { Text("Restaurar") } },
+        dismissButton = { TextButton({ pending = null }) { Text("Cancelar") } },
+    )
 }
 
 private data class Quad<A, B, C, D, E, F>(val a: A, val b: B, val c: C, val d: D, val e: E, val f: F)

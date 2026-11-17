@@ -135,9 +135,30 @@ object Repo {
         try { Td.awaitSend(tmp.id) } catch (_: Exception) {}
     }
 
-    suspend fun createForum(): TdApi.Chat = createSupergroup(CHANNEL_TITLE, "Backup de fotos e vídeos (app Nuvem). Não apague.")
-    suspend fun createChannel(): TdApi.Chat = createForum()
+    suspend fun createForum(): TdApi.Chat = createDestination(DestKind.FORUM)
+    suspend fun createChannel(): TdApi.Chat = createDestination(DestKind.CHANNEL)
+    suspend fun createGroup(): TdApi.Chat = createDestination(DestKind.GROUP)
     suspend fun createSecretChat(): TdApi.Chat = createSupergroup("Nuvem Secreto", "Álbum secreto do app Nuvem. Não apague.")
+
+    /** Cria exatamente o tipo pedido (grupo, grupo com tópicos, canal ou Mensagens Salvas). */
+    suspend fun createDestination(kind: String): TdApi.Chat {
+        Prefs.destKind = kind
+        if (kind == DestKind.SAVED) return savedMessages().also { Prefs.destKind = DestKind.SAVED }
+        val desc = "Backup de fotos e vídeos (app Nuvem). Não apague."
+        val forum = kind == DestKind.FORUM
+        val channel = kind == DestKind.CHANNEL
+        return try {
+            val chat = Td.send(TdApi.CreateNewSupergroupChat().apply {
+                title = CHANNEL_TITLE; isForum = forum; isChannel = channel; description = desc
+            }, 30_000)
+            try { Td.send(TdApi.OpenChat(chat.id), 15_000) } catch (_: Exception) {}
+            try { sendWelcome(chat.id) } catch (_: Exception) {}
+            chat
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) {
+            throw TdException((e as? TdException)?.code ?: 0, describeCreateError(e))
+        }
+    }
     suspend fun savedMessages(): TdApi.Chat { val me = Td.send(TdApi.GetMe(), 20_000); return Td.send(TdApi.CreatePrivateChat(me.id, false), 20_000) }
     fun useChat(c: TdApi.Chat) {
         if (Prefs.chatId != 0L && Prefs.chatId != c.id) {
@@ -169,13 +190,13 @@ object Repo {
                 useChat(existing); try { Td.send(TdApi.OpenChat(existing.id), 15_000) } catch (_: Exception) {}
                 chat = existing
             } else {
-                val created = createForum()
+                val created = createDestination(DestKind.effective())
                 useChat(created)
                 try { Td.send(TdApi.OpenChat(created.id), 15_000) } catch (_: Exception) {}
                 chat = created
             }
         }
-        return Topics.ensureForum(chat!!)
+        return Dest.prepare(chat!!)
     }
 
     suspend fun ensureSecretDestination(): TdApi.Chat {
@@ -311,6 +332,12 @@ object Repo {
         } catch (_: Exception) { if (i.mime.startsWith("video/")) null else imageThumb(i.path, c.cacheDir) }
     }
 
+    private fun safeCacheDir(dir: File): File {
+        val p = dir.absolutePath
+        if ("/DCIM/" in p || "/Pictures/" in p || "/Movies/" in p || "/Download/" in p) return try { Td.cacheDir() } catch (_: Exception) { dir }
+        return dir
+    }
+
     private fun imageThumb(path: String, dir: File): File? {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -318,17 +345,18 @@ object Repo {
             if (bounds.outWidth <= 0) return null
             val sample = (maxOf(bounds.outWidth, bounds.outHeight) / 320).coerceAtLeast(1)
             val bmp = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
-            val f = File(dir, "thumb_${path.hashCode()}.jpg")
+            val f = File(safeCacheDir(dir), "thumb_${path.hashCode()}.jpg")
             FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.JPEG, 85, it) }; f
         } catch (_: Exception) { null }
     }
 
     private fun videoThumb(path: String, dir: File): File? {
         val r = MediaMetadataRetriever()
+        val outDir = safeCacheDir(dir)
         return try {
             r.setDataSource(path)
             val b = r.getScaledFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 320) ?: r.frameAtTime ?: return null
-            val f = File(dir, "vthumb_${path.hashCode()}.jpg")
+            val f = File(outDir, "vthumb_${path.hashCode()}.jpg")
             FileOutputStream(f).use { b.compress(Bitmap.CompressFormat.JPEG, 80, it) }; f
         } catch (_: Exception) { null } finally { try { r.release() } catch (_: Exception) {} }
     }
@@ -410,17 +438,24 @@ object Repo {
 
     /** Já está na nuvem (hash, ou nome+tamanho se o hash ainda não estiver no índice). */
     fun alreadyOnCloud(hash: String, size: Long, name: String = ""): Boolean {
+        if (Prefs.resendExisting) {
+            val chat = Prefs.chatId
+            if (hash.isNotBlank() && (Db.anyByHashInChat(chat, hash, size) != null || Db.anyByHashInChat(chat, hash) != null)) return true
+            if (name.isNotBlank() && name != "item" && Db.anyByNameSizeInChat(chat, name, size) != null) return true
+            return false
+        }
         if (hash.isNotBlank() && (Db.anyByHash(hash, size) != null || Db.anyByHash(hash) != null)) return true
         if (name.isNotBlank() && name != "item" && Db.anyByNameSize(name, size) != null) return true
         return false
     }
 
-    /** Envia um lote (álbum de até 10). Não reenvia se o álbum já tiver saído (ex.: timeout). */
-    suspend fun uploadGroup(c: Context, batch: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit, chatId: Long = Prefs.chatId, topicId: Int = 0, folder: String = batch.first().first.bucket): List<TdApi.Message> {
+    /** Envia um lote (álbum de até 10). Itens com erro de imagem saem da fila para o fim, sem contar como enviados. */
+    suspend fun uploadGroup(c: Context, batch: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit, chatId: Long = Prefs.chatId, topicId: Int = 0, folder: String = batch.first().first.bucket): UploadResult {
         val fresh = batch.filter { !alreadyOnCloud(it.second, it.first.size, it.first.name) }
-        if (fresh.isEmpty()) return emptyList()
+        if (fresh.isEmpty()) return UploadResult()
         if (fresh.size <= 1) {
-            val (i, h) = fresh.first(); return listOf(upload(c, i, h, { onProgress(0, it) }, chatId, topicId, folder))
+            val (i, h) = fresh.first()
+            return uploadOrDefer(c, i, h, { onProgress(0, it) }, chatId, topicId, folder)
         }
         val thumbs = fresh.map { thumbFor(c, it.first) }
         try {
@@ -436,25 +471,112 @@ object Repo {
             catch (e: TdException) {
                 if (e.code == 408) { timedOut = true; null } else null
             } catch (_: Exception) { null }
-            val msgs = if (started != null) {
-                awaitAlbum(started, onProgress, metas, chatId)
+            if (started != null) {
+                try {
+                    awaitAlbum(started, onProgress, metas, chatId)
+                    if (Prefs.originalPhotos) maybeUploadOriginals(c, fresh, chatId, topicId)
+                    return UploadResult(sent = fresh)
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Exception) {
+                    if (isCancel(e) || Prefs2.backupPaused) throw e
+                    // álbum falhou (ex.: IMAGE_PROCESS_FAILED): envia um a um e adia só o que quebrar
+                }
             } else if (timedOut) {
-                recoverAlbum(chatId, topicId, metas) ?: emptyList()
-            } else {
-                fresh.mapNotNull { (i, h) ->
-                    if (alreadyOnCloud(h, i.size, i.name)) null
-                    else upload(c, i, h, { onProgress(fresh.indexOf(i to h), it) }, chatId, topicId, folder)
+                val recovered = recoverAlbum(chatId, topicId, metas)
+                if (recovered != null && recovered.size >= fresh.size) {
+                    if (Prefs.originalPhotos) maybeUploadOriginals(c, fresh, chatId, topicId)
+                    return UploadResult(sent = fresh)
                 }
             }
-            if (Prefs.originalPhotos) {
-                val need = batch.zip(msgs).filter { (pair, msg) ->
-                    msg.content is TdApi.MessagePhoto && Db.originalByHash(chatId, pair.second) == null &&
-                        Db.anyByHash(pair.second)?.folder != ORIGINALS_FOLDER
-                }.map { it.first }
-                if (need.isNotEmpty()) uploadOriginalAlbum(c, need, { idx, p -> onProgress(idx, p) }, chatId, topicId)
-            }
-            return msgs
+            return uploadEachOrDefer(c, fresh, onProgress, chatId, topicId, folder)
         } finally { thumbs.forEach { it?.delete() } }
+    }
+
+    private suspend fun maybeUploadOriginals(c: Context, fresh: List<Pair<LocalItem, String>>, chatId: Long, topicId: Int) {
+        val need = fresh.filter { (i, h) ->
+            i.mime.startsWith("image/") && Db.originalByHash(chatId, h) == null && Db.anyByHash(h)?.folder != ORIGINALS_FOLDER
+        }
+        if (need.isNotEmpty()) try { uploadOriginalAlbum(c, need, { _, _ -> }, chatId, topicId) } catch (_: Exception) {}
+    }
+
+    private suspend fun uploadOrDefer(c: Context, i: LocalItem, h: String, onProgress: (Float) -> Unit, chatId: Long, topicId: Int, folder: String): UploadResult {
+        if (alreadyOnCloud(h, i.size, i.name)) return UploadResult()
+        return try {
+            upload(c, i, h, onProgress, chatId, topicId, folder)
+            UploadResult(sent = listOf(i to h))
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) {
+            if (isCancel(e) || Prefs2.backupPaused) throw e
+            UploadResult(deferred = listOf(DeferredUpload(i, h, e.message ?: "Falha no envio", folder, chatId, topicId)))
+        }
+    }
+
+    private suspend fun uploadEachOrDefer(c: Context, fresh: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit, chatId: Long, topicId: Int, folder: String): UploadResult {
+        val sent = ArrayList<Pair<LocalItem, String>>()
+        val deferred = ArrayList<DeferredUpload>()
+        for ((idx, pair) in fresh.withIndex()) {
+            val (i, h) = pair
+            if (alreadyOnCloud(h, i.size, i.name)) { sent += pair; continue }
+            val r = uploadOrDefer(c, i, h, { onProgress(idx, it) }, chatId, topicId, folder)
+            sent += r.sent; deferred += r.deferred
+        }
+        return UploadResult(sent, deferred)
+    }
+
+    /** Segunda tentativa, no fim da fila: JPEG redimensionado e, se precisar, o original como documento. Não marca como enviado se falhar. */
+    suspend fun retryDeferred(c: Context, list: List<DeferredUpload>, onProgress: (Int, Int, String) -> Unit): List<DeferredUpload> {
+        val still = ArrayList<DeferredUpload>()
+        list.forEachIndexed { idx, d ->
+            onProgress(idx + 1, list.size, d.item.name)
+            if (alreadyOnCloud(d.hash, d.item.size, d.item.name)) return@forEachIndexed
+            val folder = d.folder
+            var jpeg: File? = null
+            val thumb = try { thumbFor(c, d.item) } catch (_: Exception) { null }
+            try {
+                if (d.item.mime.startsWith("image/") || Meta.mimeFromName(d.item.name).startsWith("image/")) {
+                    jpeg = transcodeJpeg(d.item.path, c.cacheDir)
+                    if (jpeg != null) {
+                        try {
+                            uploadFile(jpeg.absolutePath, jpeg.length(), captionFor(d.item, folder), thumb, { }, "image/jpeg", c.cacheDir, meta = metaOf(d.item, d.hash), chatId = d.chatId, topicId = d.topicId)
+                            if (Prefs.originalPhotos) try { uploadOriginalAlbum(c, listOf(d.item to d.hash), { _, _ -> }, d.chatId, d.topicId) } catch (_: Exception) {}
+                            return@forEachIndexed
+                        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (e: Exception) { if (isCancel(e) || Prefs2.backupPaused) throw e }
+                    }
+                }
+                uploadFile(d.item.path, d.item.size, captionFor(d.item, folder), thumb, { }, d.item.mime, c.cacheDir, forceDocument = true, meta = metaOf(d.item, d.hash), chatId = d.chatId, topicId = d.topicId)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                if (isCancel(e) || Prefs2.backupPaused) throw e
+                still += d.copy(error = e.message ?: d.error)
+            } finally {
+                jpeg?.delete(); thumb?.delete()
+            }
+        }
+        return still
+    }
+
+    /** Converte uma foto (inclui HEIC) para JPEG com lado máximo 2560 px, só para o Telegram aceitar. O original não é alterado. */
+    fun transcodeJpeg(src: String, dir: File, maxSide: Int = ImageProcess.JPEG_MAX_SIDE): File? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(src, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            val longest = maxOf(bounds.outWidth, bounds.outHeight)
+            val sample = (longest / maxSide).coerceAtLeast(1)
+            val bmp = BitmapFactory.decodeFile(src, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+            val scaled = if (maxOf(bmp.width, bmp.height) > maxSide) {
+                val s = maxSide.toFloat() / maxOf(bmp.width, bmp.height)
+                val w = (bmp.width * s).toInt().coerceAtLeast(1)
+                val h = (bmp.height * s).toInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(bmp, w, h, true)
+            } else bmp
+            val out = File(dir, "nuvem_tx_${src.hashCode()}.jpg")
+            FileOutputStream(out).use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            if (scaled !== bmp) scaled.recycle()
+            bmp.recycle()
+            out.takeIf { it.exists() && it.length() > 0 }
+        } catch (_: Exception) { null }
     }
 
     /** Depois do último item do tópico/álbum, marca o nome. */
@@ -532,15 +654,16 @@ object Repo {
         var generated: File? = null
         try {
             val useThumb = thumb ?: if (kind == SendKind.VIDEO) {
-                generated = videoThumb(path, cacheDir ?: File(path).parentFile ?: File("."))
+                generated = videoThumb(path, cacheDir ?: Td.cacheDir())
                 generated
             } else null
             return try {
                 sendContent(buildContent(kind, path, caption, useThumb), onProgress, replyTo, meta, chatId, topicId)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
-                if (kind == SendKind.DOCUMENT) throw e
-                sendContent(buildContent(SendKind.DOCUMENT, path, caption, useThumb), onProgress, replyTo, meta, chatId, topicId)
+                // Foto/vídeo com erro (ex.: IMAGE_PROCESS_FAILED) não vai como documento aqui.
+                // O backup adia o item e tenta JPEG + documento no fim da fila.
+                throw e
             }
         } finally { generated?.delete() }
     }
@@ -936,10 +1059,22 @@ object Repo {
             put(MediaStore.MediaColumns.DATE_TAKEN, ci.taken); put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val coll = if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        val uri = c.contentResolver.insert(coll, cv) ?: return@withContext false
-        c.contentResolver.openOutputStream(uri)!!.use { o -> File(src).inputStream().use { it.copyTo(o) } }
-        c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
-        true
+        var uri: android.net.Uri? = null
+        var pending = false
+        try {
+            uri = c.contentResolver.insert(coll, cv) ?: return@withContext false
+            pending = true
+            c.contentResolver.openOutputStream(uri)!!.use { o -> File(src).inputStream().use { it.copyTo(o) } }
+            c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            pending = false
+            true
+        } catch (_: Exception) {
+            if (pending && uri != null) {
+                try { c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) } catch (_: Exception) {}
+                try { c.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            }
+            false
+        }
     }
 
     suspend fun restoreAlbum(c: Context, folder: String, onProgress: ((Int, Int) -> Unit)? = null): Pair<Int, Int> = withContext(Dispatchers.IO) {

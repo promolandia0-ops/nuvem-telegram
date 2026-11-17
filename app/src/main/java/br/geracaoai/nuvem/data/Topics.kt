@@ -41,6 +41,7 @@ object Topics {
     suspend fun idFor(chat: Long, name: String): Int {
         val key = name.ifBlank { "Outros" }
         if (chat == 0L) return 0
+        if (DestKind.effective() != DestKind.FORUM) return 0
         val ck = "$chat|$key"
         val map = cache()
         map[ck]?.takeIf { it != 0 }?.let { return it }

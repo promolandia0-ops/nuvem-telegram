@@ -3,6 +3,7 @@ package br.geracaoai.nuvem.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -150,23 +151,74 @@ fun DestinationScreen(onDone: () -> Unit) {
     var found by remember { mutableStateOf<List<TdApi.Chat>?>(null) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { found = try { Repo.findNuvemChannels() } catch (e: Exception) { emptyList() } }
-    fun pick(f: suspend () -> TdApi.Chat) { busy = true; scope.launch { try { Repo.useChat(f()); onDone() } catch (e: Exception) { err = traduz(e.message) }; busy = false } }
-    AuthFrame(Icons.Rounded.CloudQueue, "Onde guardar?", "O ideal é um grupo privado “Nuvem” só seu, com tópicos por álbum. Se a conta for nova, o Telegram às vezes bloqueia criar grupo ou canal — aí use Mensagens Salvas por enquanto.") {
+    var kind by remember { mutableStateOf(DestKind.effective()) }
+    var confirm by remember { mutableStateOf(false) }
+    var resend by remember { mutableStateOf(false) }
+    var pending by remember { mutableStateOf<(suspend () -> TdApi.Chat)?>(null) }
+    var pendingKind by remember { mutableStateOf(DestKind.effective()) }
+    val existing = remember { Dest.hasExistingBackup() }
+    LaunchedEffect(Unit) { found = try { Repo.findNuvemChannels() } catch (_: Exception) { emptyList() } }
+    fun run(chosen: String, f: suspend () -> TdApi.Chat) {
+        busy = true
+        scope.launch {
+            try {
+                Prefs.resendExisting = resend
+                Prefs.destKind = chosen
+                Repo.useChat(f())
+                onDone()
+            } catch (e: Exception) { err = traduz(e.message) }
+            busy = false
+        }
+    }
+    fun pick(chosen: String, f: suspend () -> TdApi.Chat) {
+        if (existing) { pendingKind = chosen; pending = f; confirm = true } else run(chosen, f)
+    }
+    AuthFrame(Icons.Rounded.CloudQueue, "Onde guardar?", "Escolha o tipo de destino. O padrão é um grupo privado só seu. Se a conta for nova, o Telegram às vezes bloqueia criar grupo ou canal — aí use Mensagens Salvas por enquanto.") {
+        Text("Tipo de destino", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        DestKind.all.forEach { k ->
+            FilterChip(selected = kind == k, onClick = { kind = k; Prefs.destKind = k }, label = { Text(DestKind.label(k)) },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Nv.Sky.copy(0.25f), selectedLabelColor = MaterialTheme.colorScheme.onSurface))
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(DestKind.hint(kind), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
         if (found == null) CircularProgressIndicator()
-        found?.forEach { c -> OutlinedCard({ pick { c } }, Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        found?.forEach { c -> OutlinedCard({ pick(kind) { c } }, Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             ListItem(headlineContent = { Text("Usar “${c.title}” já existente") }, leadingContent = { Icon(Icons.Rounded.Folder, null) }) } }
         Spacer(Modifier.height(8.dp))
-        Button({ pick { Repo.createChannel() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text(if (busy) "Criando…" else "Criar grupo privado “Nuvem”")
+        if (kind == DestKind.SAVED) {
+            Button({ pick(DestKind.SAVED) { Repo.savedMessages() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text(if (busy) "Abrindo…" else "Usar Mensagens Salvas")
+            }
+        } else {
+            Button({ pick(kind) { Repo.createDestination(kind) } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text(if (busy) "Criando…" else "Criar ${DestKind.label(kind)} “Nuvem”")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton({ pick(DestKind.SAVED) { Repo.savedMessages() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Usar Mensagens Salvas") }
         }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton({ pick { Repo.savedMessages() } }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Usar Mensagens Salvas") }
         err?.let {
             Spacer(Modifier.height(8.dp))
             Text(it, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(8.dp))
-            Text("Se não der pra criar o grupo agora, use Mensagens Salvas. Os tópicos ficam pra quando o Telegram liberar a criação.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Se não der pra criar agora, use Mensagens Salvas. Você pode trocar o destino depois em Ajustes.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+    if (confirm) AlertDialog(
+        { confirm = false; pending = null },
+        title = { Text("Usar este destino?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Os arquivos que já foram enviados (em outro grupo, canal ou nas Mensagens Salvas) não serão reenviados, a menos que você marque a opção abaixo. O app reconhece o arquivo e só sobe o que ainda não está na sua conta.")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { resend = !resend }) {
+                    Checkbox(resend, { resend = it })
+                    Text("Reenviar também o que já está em outro destino", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = { Button({ confirm = false; val f = pending; val k = pendingKind; pending = null; if (f != null) run(k, f) }) { Text("Continuar") } },
+        dismissButton = { TextButton({ confirm = false; pending = null }) { Text("Cancelar") } },
+    )
 }
