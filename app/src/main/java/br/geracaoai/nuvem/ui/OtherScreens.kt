@@ -22,12 +22,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.work.Backup
+import br.geracaoai.nuvem.work.BatteryGuide
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,9 +71,10 @@ fun BackupScreen() {
     val wm = WorkManager.getInstance(ctx)
     val now by wm.getWorkInfosForUniqueWorkFlow(Backup.NOW).collectAsStateWithLifecycle(emptyList())
     val per by wm.getWorkInfosForUniqueWorkFlow(Backup.PERIODIC).collectAsStateWithLifecycle(emptyList())
+    val cont by wm.getWorkInfosForUniqueWorkFlow(Backup.CONTINUE).collectAsStateWithLifecycle(emptyList())
     var paused by remember { mutableStateOf(Prefs2.backupPaused) }
     // Ao pausar, a UI para na hora (não espera o WorkManager confirmar o cancelamento).
-    val running = if (paused) null else (now + per).firstOrNull { it.state == WorkInfo.State.RUNNING }
+    val running = if (paused) null else (now + per + cont).firstOrNull { it.state == WorkInfo.State.RUNNING }
     var buckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
     var sel by remember { mutableStateOf(Prefs.folders) }
     var auto by remember { mutableStateOf(Prefs.autoBackup) }
@@ -114,6 +119,7 @@ fun BackupScreen() {
                 }
             }
         }
+        item { SamsungBatteryCard() }
         item { FreeUpCard() }
         item { DupCleanRow() }
         item { Text("Opções", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
@@ -208,7 +214,7 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro grupo, canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
             modifier = Modifier.clickable { Prefs.clearDest(); onLogout() }) }
         item { ListItem(headlineContent = { Text("Sair / trocar de conta") }, supportingContent = { Text("Entrar com outro número. Os arquivos continuam no Telegram.") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.5.0 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+        item { Text("Nuvem 1.5.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
     }
     if (emailDlg) AlertDialog({ emailDlg = false }, title = { Text("E-mail de login") },
         text = {
@@ -308,6 +314,34 @@ fun SecretAlbumsEntry(onOpen: (List<CloudItem>, Int) -> Unit) {
         }
     }
 }
+
+
+@Composable
+fun SamsungBatteryCard() {
+    val ctx = LocalContext.current
+    var show by remember { mutableStateOf(BatteryGuide.shouldShowCard(ctx)) }
+    val life = LocalLifecycleOwner.current
+    DisposableEffect(life) {
+        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) show = BatteryGuide.shouldShowCard(ctx) }
+        life.lifecycle.addObserver(obs)
+        onDispose { life.lifecycle.removeObserver(obs) }
+    }
+    if (!show) return
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Pra o backup não parar no Samsung", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("O celular costuma matar o backup com a tela desligada. Faz isso uma vez:", style = MaterialTheme.typography.bodyMedium)
+            Text("1. Toque em Permitir segundo plano e aceite não otimizar a bateria do Nuvem.")
+            Text("2. Vá em Configurações > Bateria > Limites de uso em segundo plano > Apps que nunca suspendem e adicione o Nuvem.")
+            Text("3. Nas informações do app, em Bateria, escolha Sem restrições.")
+            Text("Deixe as notificações permitidas pra acompanhar o progresso e o backup continuar.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(4.dp))
+            Button({ BatteryGuide.openBest(ctx) }) { Text("Permitir segundo plano") }
+            TextButton({ Prefs2.batteryGuideDismissed = true; show = false }) { Text("Já configurei") }
+        }
+    }
+}
+
 
 @Composable
 fun DupCleanRow() {

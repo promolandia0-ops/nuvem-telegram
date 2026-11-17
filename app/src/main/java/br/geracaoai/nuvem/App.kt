@@ -19,6 +19,7 @@ class App : Application() {
             NotificationChannel(br.geracaoai.nuvem.play.PlaybackService.CHANNEL, "Player", NotificationManager.IMPORTANCE_LOW))
         Td.init(this)
         Backup.schedule(this)
+        br.geracaoai.nuvem.work.NetworkWatch.start(this)
         br.geracaoai.nuvem.work.WatchedSync.schedule(this)
         br.geracaoai.nuvem.work.MediaWatch.start(this)
     }

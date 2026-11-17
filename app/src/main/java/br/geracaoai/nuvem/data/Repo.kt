@@ -11,7 +11,10 @@ import android.util.Size
 import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.tg.TdException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -582,7 +585,7 @@ object Repo {
         val sent = Td.send(TdApi.SendMessageAlbum().apply {
             this.chatId = chatId; this.topicId = Topics.topic(topicId)
             inputMessageContents = contents.toTypedArray(); options = sendOpts()
-        })
+        }, 90_000)
         val tmps = sent.messages
         if (tmps.isNullOrEmpty()) throw TdException(0, "Álbum vazio")
         return tmps
@@ -607,19 +610,20 @@ object Repo {
 
     private suspend fun awaitAlbum(tmps: Array<TdApi.Message>, onProgress: (Int, Float) -> Unit, metas: List<Meta>? = null, chatId: Long = Prefs.chatId): List<TdApi.Message> {
         val chat = chatId
-        val fileIds = tmps.mapNotNull { fileOf(it)?.id }.toSet()
-        val job = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
-            Td.fileUpdates.collect { f ->
-                if (f.id in fileIds && f.expectedSize > 0) onProgress(0, f.remote.uploadedSize.toFloat() / f.expectedSize)
-            }
-        }
+        val out = ArrayList<TdApi.Message>(tmps.size)
         try {
-            val out = ArrayList<TdApi.Message>(tmps.size)
             for (tmp in tmps) {
-                val res = try { Td.awaitSend(tmp.id) }
+                val fileId = fileOf(tmp)?.id ?: -1
+                val res = try { awaitSendOrStall(tmp.id, fileId) { p -> onProgress(out.size, p) } }
                 catch (e: kotlinx.coroutines.CancellationException) {
                     withContext(kotlinx.coroutines.NonCancellable) {
                         tmps.forEach { cancelSending(chat, it.id, fileOf(it)?.id ?: -1) }
+                    }
+                    throw e
+                }
+                catch (e: TdException) {
+                    if (e.code == 408) withContext(kotlinx.coroutines.NonCancellable) {
+                        tmps.drop(out.size).forEach { cancelSending(chat, it.id, fileOf(it)?.id ?: -1) }
                     }
                     throw e
                 }
@@ -631,30 +635,76 @@ object Repo {
                 out += msg
             }
             return out
-        } finally { job.cancel() }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
     }
 
     private suspend fun sendContent(content: TdApi.InputMessageContent, onProgress: (Float) -> Unit, replyTo: Long = 0L, meta: Meta? = null, chatId: Long = Prefs.chatId, topicId: Int = 0): TdApi.Message {
         val chat = chatId
-        val tmp = Td.send(TdApi.SendMessage().apply {
-            this.chatId = chat; this.topicId = Topics.topic(topicId)
-            inputMessageContent = content; options = sendOpts()
-            if (replyTo != 0L) this.replyTo = TdApi.InputMessageReplyToMessage().apply { messageId = replyTo }
-        })
-        val fileId = fileOf(tmp)?.id ?: -1
-        val job = kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
-            Td.fileUpdates.collect { f -> if (f.id == fileId && f.expectedSize > 0) onProgress(f.remote.uploadedSize.toFloat() / f.expectedSize) }
+        var last: Exception? = null
+        for (attempt in 0 until StallPolicy.MAX_TRIES) {
+            val tmp = Td.send(TdApi.SendMessage().apply {
+                this.chatId = chat; this.topicId = Topics.topic(topicId)
+                inputMessageContent = content; options = sendOpts()
+                if (replyTo != 0L) this.replyTo = TdApi.InputMessageReplyToMessage().apply { messageId = replyTo }
+            }, 90_000)
+            val fileId = fileOf(tmp)?.id ?: -1
+            try {
+                val res = try { awaitSendOrStall(tmp.id, fileId, onProgress) }
+                catch (e: kotlinx.coroutines.CancellationException) {
+                    withContext(kotlinx.coroutines.NonCancellable) { cancelSending(chat, tmp.id, fileId) }
+                    throw e
+                } catch (e: TdException) {
+                    if (e.code == 408) withContext(kotlinx.coroutines.NonCancellable) { cancelSending(chat, tmp.id, fileId) }
+                    throw e
+                }
+                val msg = res.message ?: throw TdException(res.error?.code ?: 0, res.error?.message ?: "Falha no envio")
+                val r = remoteOf(msg) ?: throw TdException(0, "Mensagem sem mídia")
+                if (!r.file.remote.isUploadingCompleted) throw TdException(0, "Upload incompleto")
+                if (meta != null) remember(msg, meta) else toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
+                return msg
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                if (isCancel(e) || Prefs2.backupPaused) throw e
+                last = e
+                if (!StallPolicy.shouldRetry(attempt)) break
+                delay(StallPolicy.backoffMs(attempt))
+            }
         }
-        val res = try { Td.awaitSend(tmp.id) }
-        catch (e: kotlinx.coroutines.CancellationException) {
-            withContext(kotlinx.coroutines.NonCancellable) { cancelSending(chat, tmp.id, fileId) }
+        throw last ?: TdException(0, "Falha no envio")
+    }
+
+    /** Espera o envio, mas aborta se o upload ficar parado sem progresso. */
+    private suspend fun awaitSendOrStall(tmpId: Long, fileId: Int, onProgress: (Float) -> Unit): br.geracaoai.nuvem.tg.SendResult = coroutineScope {
+        var lastAt = System.currentTimeMillis()
+        var lastBytes = -1L
+        val send = async { Td.awaitSend(tmpId) }
+        val watch = launch {
+            if (fileId > 0) launch {
+                Td.fileUpdates.collect { f ->
+                    if (f.id == fileId) {
+                        val up = f.remote.uploadedSize.toLong()
+                        if (up != lastBytes) { lastBytes = up; lastAt = System.currentTimeMillis() }
+                        if (f.expectedSize > 0) onProgress(f.remote.uploadedSize.toFloat() / f.expectedSize)
+                    }
+                }
+            }
+            while (isActive && send.isActive) {
+                delay(5_000)
+                if (StallPolicy.stalled(lastAt, System.currentTimeMillis())) {
+                    send.cancel()
+                    break
+                }
+            }
+        }
+        try {
+            send.await()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            if (Prefs2.backupPaused) throw e
+            if (StallPolicy.stalled(lastAt, System.currentTimeMillis())) {
+                throw TdException(408, "Envio parado (sem progresso). Tentando de novo.")
+            }
             throw e
-        } finally { job.cancel() }
-        val msg = res.message ?: throw TdException(res.error?.code ?: 0, res.error?.message ?: "Falha no envio")
-        val r = remoteOf(msg) ?: throw TdException(0, "Mensagem sem mídia")
-        if (!r.file.remote.isUploadingCompleted) throw TdException(0, "Upload incompleto")
-        if (meta != null) remember(msg, meta) else toCloud(msg)?.let { Db.putCloud(it); Db.bump() }
-        return msg
+        } finally { watch.cancel() }
     }
 
     /** Apagar a mensagem pendente faz o TDLib abortar o upload; depois libera o arquivo parcial. */

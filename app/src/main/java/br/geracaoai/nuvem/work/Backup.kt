@@ -1,14 +1,20 @@
 package br.geracaoai.nuvem.work
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.work.*
 import br.geracaoai.nuvem.R
 import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.tg.TdException
+import br.geracaoai.nuvem.ui.MainActivity
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
@@ -17,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -26,20 +33,35 @@ object Backup {
     const val CHANNEL = "backup"
     const val PERIODIC = "backup_periodic"
     const val NOW = "backup_now"
+    const val CONTINUE = "backup_continue"
+    const val ACTION_PAUSE = "br.geracaoai.nuvem.BACKUP_PAUSE"
+    const val ACTION_STOP = "br.geracaoai.nuvem.BACKUP_STOP"
+    const val NOTIF_ID = 42
     private val gate = AtomicBoolean(false)
     fun tryStart(): Boolean = gate.compareAndSet(false, true)
     fun end() { gate.set(false) }
     fun runningInProcess() = gate.get()
 
+    fun ensureChannel(c: Context) {
+        val nm = c.getSystemService(NotificationManager::class.java) ?: return
+        val ch = NotificationChannel(CHANNEL, "Backup", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Progresso do backup em segundo plano"
+            setShowBadge(false)
+        }
+        nm.createNotificationChannel(ch)
+    }
+
     private fun constraints() = Constraints.Builder()
         .setRequiredNetworkType(if (Prefs.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
         .setRequiresCharging(Prefs.chargingOnly).build()
+
+    private fun uniqueNames() = listOf(NOW, PERIODIC, CONTINUE)
 
     fun isWorkRunning(c: Context): Boolean {
         if (runningInProcess()) return true
         return try {
             val wm = WorkManager.getInstance(c)
-            (wm.getWorkInfosForUniqueWork(NOW).get() + wm.getWorkInfosForUniqueWork(PERIODIC).get())
+            uniqueNames().flatMap { wm.getWorkInfosForUniqueWork(it).get() }
                 .any { it.state == WorkInfo.State.RUNNING }
         } catch (_: Exception) { false }
     }
@@ -58,7 +80,7 @@ object Backup {
     fun stop(c: Context) {
         Prefs2.backupPaused = true
         val wm = WorkManager.getInstance(c)
-        wm.cancelUniqueWork(NOW); wm.cancelUniqueWork(PERIODIC)
+        wm.cancelUniqueWork(NOW); wm.cancelUniqueWork(PERIODIC); wm.cancelUniqueWork(CONTINUE)
         cancelPendingUploads()
     }
 
@@ -78,20 +100,86 @@ object Backup {
     fun runNow(c: Context, ignoreConstraints: Boolean = false, expedited: Boolean = false) {
         if (Prefs2.backupPaused) return
         if (isWorkRunning(c)) return
+        WorkManager.getInstance(c).cancelUniqueWork(CONTINUE)
         val b = OneTimeWorkRequestBuilder<BackupWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
         b.setConstraints(if (ignoreConstraints) Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build() else constraints())
         if (expedited) b.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         WorkManager.getInstance(c).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, b.build())
     }
+
+    /** Agenda a continuação depois de um timeout ou queda, sem rodar em paralelo. */
+    fun continueSoon(c: Context, delayMin: Long = 1) {
+        if (Prefs2.backupPaused || !Prefs.autoBackup) return
+        val b = OneTimeWorkRequestBuilder<BackupWorker>()
+            .setInitialDelay(delayMin.coerceAtLeast(1), TimeUnit.MINUTES)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+            .setConstraints(constraints())
+        WorkManager.getInstance(c).enqueueUniqueWork(CONTINUE, ExistingWorkPolicy.REPLACE, b.build())
+    }
 }
 
 class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
-    private fun notif(text: String, done: Int, total: Int, pct: Int): Notification =
-        NotificationCompat.Builder(applicationContext, Backup.CHANNEL).setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Backup no Telegram • $done/$total").setContentText(text).setOngoing(true).setOnlyAlertOnce(true)
-            .setProgress(100, pct, total == 0).build()
+    private val startedElapsed = SystemClock.elapsedRealtime()
+    private val keep = KeepAlive(ctx)
 
-    override suspend fun getForegroundInfo() = ForegroundInfo(42, notif("Preparando…", 0, 0, 0), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+    private fun piFlags() = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+
+    private fun actionPi(action: String, req: Int): PendingIntent {
+        val i = Intent(applicationContext, BackupReceiver::class.java).setAction(action)
+        return PendingIntent.getBroadcast(applicationContext, req, i, piFlags())
+    }
+
+    private fun openPi(): PendingIntent {
+        val i = Intent(applicationContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(applicationContext, 7, i, piFlags())
+    }
+
+    private fun notif(text: String, done: Int, total: Int, pct: Int): Notification {
+        val title = if (total > 0) "Backup no Telegram • $done de $total" else "Backup no Telegram"
+        return NotificationCompat.Builder(applicationContext, Backup.CHANNEL).setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(title).setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(openPi())
+            .setProgress(100, pct.coerceIn(0, 100), total == 0)
+            .addAction(0, "Pausar", actionPi(Backup.ACTION_PAUSE, 11))
+            .addAction(0, "Parar", actionPi(Backup.ACTION_STOP, 12))
+            .build()
+    }
+
+    override suspend fun getForegroundInfo() = ForegroundInfo(Backup.NOTIF_ID, notif("Preparando…", 0, 0, 0), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+
+    private suspend fun startForegroundSafe() {
+        Backup.ensureChannel(applicationContext)
+        var last: Exception? = null
+        repeat(3) { i ->
+            try {
+                setForeground(ForegroundInfo(Backup.NOTIF_ID, notif("Preparando…", 0, 0, 0), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+                return
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                last = e
+                if (isFgsTimeout(e)) throw e
+                delay(400L * (i + 1))
+            }
+        }
+        if (last != null) Prefs.lastError = "Não deu pra mostrar a notificação do backup. Permita notificações pra ele não parar em segundo plano."
+    }
+
+    private fun isFgsTimeout(e: Throwable): Boolean {
+        var c: Throwable? = e
+        while (c != null) {
+            val n = c.javaClass.simpleName
+            if (n == "ForegroundServiceTimeoutException" || n.contains("ForegroundServiceStartNotAllowed")) return true
+            if (c.message?.contains("timed out", true) == true && c.message?.contains("foreground", true) == true) return true
+            c = c.cause
+        }
+        return false
+    }
+
+    private fun nearTimeout() = StallPolicy.nearTimeout(startedElapsed, SystemClock.elapsedRealtime())
 
     private sealed class Ev {
         data class Ready(val item: LocalItem, val hash: String) : Ev()
@@ -100,152 +188,218 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     override suspend fun doWork(): Result {
         Td.init(applicationContext)
-        if (Prefs.chatId == 0L || (Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) || Prefs2.backupPaused) return Result.success()
-        if (!Td.awaitReady()) return Result.retry()
-        if (!Backup.tryStart()) return Result.success()
-        try { setForeground(getForegroundInfo()) } catch (_: Exception) {}
+        keep.acquire()
+        if (Prefs.chatId == 0L || (Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) || Prefs2.backupPaused) {
+            keep.release(); return Result.success()
+        }
+        if (!Td.awaitReady()) { keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry() }
+        if (!Backup.tryStart()) { keep.release(); return Result.success() }
         return try {
-            Prefs.lastError = ""
-            fun report(d: Int, total: Int, name: String, pct: Int) {
-                setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct))
-                setForegroundAsync(ForegroundInfo(42, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
-            }
-            report(0, 0, "Preparando o destino…", 0)
-            val main = Repo.ensureDestination()
-            var secretChat = 0L
-            if (Prefs.secretFolders.isNotEmpty()) {
-                try { secretChat = Repo.ensureSecretDestination().id } catch (e: Exception) {
-                    if (isCancel(e)) throw e
-                    Prefs.lastError = describeCreateError(e)
-                }
-            }
-            report(0, 0, "Conferindo o que está no Telegram…", 0)
-            try { Repo.reconcileCloud(force = true) { done, tot -> report(done, tot, "Conferindo o Telegram… $done/$tot", 0) } } catch (_: Exception) {}
-
-            val max = Meta.maxSize(Td.isPremium.value)
-            val selected = Prefs.folders + Prefs.secretFolders
-            report(0, 0, "Lendo pastas…", 0)
-            val counts = withContext(Dispatchers.IO) { LocalMedia.countByBucket(applicationContext, selected) }
-            val folders = FolderPlan.order(selected.filter { (counts[it] ?: 0) > 0 })
-            val total = folders.sumOf { counts[it] ?: 0 }
-            if (folders.isEmpty() || total == 0) {
-                Prefs.lastError = if (selected.isEmpty()) "Nenhuma pasta selecionada." else "Nenhum arquivo acessível nas pastas escolhidas. Confira a permissão de fotos e vídeos."
-                Prefs.lastBackup = System.currentTimeMillis()
+            startForegroundSafe()
+            runBackup()
+        } catch (e: java.util.concurrent.CancellationException) {
+            if (Checkpoint.shouldResume() && !Prefs2.backupPaused) Backup.continueSoon(applicationContext, 1)
+            throw e
+        } catch (e: CancellationException) {
+            if (Checkpoint.shouldResume() && !Prefs2.backupPaused) Backup.continueSoon(applicationContext, 1)
+            throw e
+        } catch (e: Exception) {
+            if (isStopped || Prefs2.backupPaused || isCancel(e)) return Result.success()
+            if (isFgsTimeout(e) || nearTimeout()) {
+                Backup.continueSoon(applicationContext, 1)
                 return Result.success()
             }
+            Prefs.lastError = e.message ?: "erro"
+            try { setProgress(workDataOf("name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
+            Backup.continueSoon(applicationContext, 2)
+            if (e is TdException && (e.code == 429 || e.code == 408 || e.code >= 500)) Result.retry() else Result.retry()
+        } finally {
+            keep.release()
+            Backup.end()
+        }
+    }
 
-            var done = 0; var sentPhotos = 0; var sentVideos = 0; var sentDocs = 0; var sentBytes = 0L
-            val seen = HashSet<String>()
-
-            fun loadFolder(name: String): List<LocalItem> =
-                LocalMedia.inBucket(applicationContext, name).filter { it.size in 1..max && File(it.path).canRead() }
-
-            fun isDocPair(p: Pair<LocalItem, String>): Boolean {
-                val mime = p.first.mime.ifBlank { Meta.mimeFromName(p.first.name) }
-                return Meta.sendKind(mime, p.first.size) == SendKind.DOCUMENT
+    private suspend fun runBackup(): Result {
+        Prefs.lastError = ""
+        fun report(d: Int, total: Int, name: String, pct: Int) {
+            setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct))
+            try {
+                setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            } catch (_: Exception) {}
+        }
+        if (!Td.ready) { Td.init(applicationContext); if (!Td.awaitReady()) return Result.retry() }
+        report(0, 0, Checkpoint.load()?.label?.takeIf { it.isNotBlank() } ?: "Preparando o destino…", 0)
+        val main = Repo.ensureDestination()
+        var secretChat = 0L
+        if (Prefs.secretFolders.isNotEmpty()) {
+            try { secretChat = Repo.ensureSecretDestination().id } catch (e: Exception) {
+                if (isCancel(e)) throw e
+                Prefs.lastError = describeCreateError(e)
             }
+        }
+        report(0, 0, "Conferindo o que está no Telegram…", 0)
+        try { Repo.reconcileCloud(force = true) { done, tot -> report(done, tot, "Conferindo o Telegram… $done/$tot", 0) } } catch (_: Exception) {}
 
-            coroutineScope {
-                var nextList = async(Dispatchers.IO) { if (folders.isNotEmpty()) loadFolder(folders[0]) else emptyList() }
-                var prehashJob: kotlinx.coroutines.Job? = null
+        val max = Meta.maxSize(Td.isPremium.value)
+        val selected = Prefs.folders + Prefs.secretFolders
+        report(0, 0, "Lendo pastas…", 0)
+        val counts = withContext(Dispatchers.IO) { LocalMedia.countByBucket(applicationContext, selected) }
+        val folders = FolderPlan.order(selected.filter { (counts[it] ?: 0) > 0 })
+        val total = folders.sumOf { counts[it] ?: 0 }
+        if (folders.isEmpty() || total == 0) {
+            Prefs.lastError = if (selected.isEmpty()) "Nenhuma pasta selecionada." else "Nenhum arquivo acessível nas pastas escolhidas. Confira a permissão de fotos e vídeos."
+            Prefs.lastBackup = System.currentTimeMillis()
+            Checkpoint.clear()
+            return Result.success()
+        }
 
-                for ((idx, folder) in folders.withIndex()) {
-                    if (isStopped || Prefs2.backupPaused) break
-                    val album = FolderPlan.albumName(folder)
-                    val items = nextList.await()
-                    val nextName = folders.getOrNull(idx + 1)
-                    nextList = async(Dispatchers.IO) { if (nextName != null) loadFolder(nextName) else emptyList() }
-                    prehashJob?.cancel()
-                    if (nextName != null) {
-                        val upcoming = nextList
-                        prehashJob = launch(Dispatchers.IO) {
-                            val listed = try { upcoming.await() } catch (_: Exception) { emptyList() }
-                            for (i in listed) {
-                                if (isStopped) break
-                                coroutineContext.ensureActive()
-                                try { Repo.localHash(i) } catch (_: Exception) {}
-                            }
-                        }
-                    }
+        var done = 0; var sentPhotos = 0; var sentVideos = 0; var sentDocs = 0; var sentBytes = 0L
+        val seen = HashSet<String>()
+        val runStarted = Checkpoint.load()?.startedAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
 
-                    val secret = folder in Prefs.secretFolders
-                    val chat = if (secret) {
-                        if (secretChat == 0L) {
-                            done += items.size
-                            report(done, total, "$album • pasta secreta indisponível", 0)
-                            continue
-                        }
-                        secretChat
-                    } else main.id
-                    val topicId = Topics.idFor(chat, album)
-                    val folderTotal = items.size
-                    var folderDone = 0
+        fun loadFolder(name: String): List<LocalItem> =
+            LocalMedia.inBucket(applicationContext, name).filter { it.size in 1..max && File(it.path).canRead() }
 
-                    val evs = Channel<Ev>(32)
-                    val producer = launch(Dispatchers.IO) {
-                        try {
-                            for (i in items) {
-                                if (isStopped || Prefs2.backupPaused) break
-                                coroutineContext.ensureActive()
-                                val h = try { Repo.localHash(i) } catch (_: Exception) { "" }
-                                val existing = h.isNotBlank() && (Repo.alreadyOnCloud(h, i.size, i.name) || !Dedup.claimHash(seen, h, i.size))
-                                if (existing || h.isBlank()) {
-                                    val needOrig = Prefs.originalPhotos && i.mime.startsWith("image/") &&
-                                        h.isNotBlank() && Db.originalByHash(chat, h) == null && Db.anyByHash(h)?.folder != ORIGINALS_FOLDER &&
-                                        Repo.alreadyOnCloud(h, i.size, i.name)
-                                    evs.send(Ev.Skip(i, h, needOrig))
-                                } else evs.send(Ev.Ready(i, h))
-                            }
-                        } finally { evs.close() }
-                    }
+        fun isDocPair(p: Pair<LocalItem, String>): Boolean {
+            val mime = p.first.mime.ifBlank { Meta.mimeFromName(p.first.name) }
+            return Meta.sendKind(mime, p.first.size) == SendKind.DOCUMENT
+        }
 
-                    val buf = ArrayList<Pair<LocalItem, String>>()
-                    val missingOrig = ArrayList<Pair<LocalItem, String>>()
-                    var sentInFolder = 0
+        suspend fun maybeYieldForTimeout(folder: String, folderDone: Int, folderTotal: Int): Boolean {
+            if (!nearTimeout()) return false
+            Checkpoint.mark(folder, done, total, startedAt = runStarted)
+            report(done, total, "Continuando daqui a pouco (limite do Android)…", 0)
+            Backup.continueSoon(applicationContext, 1)
+            return true
+        }
 
-                    suspend fun sendChunks(chunks: List<List<Pair<LocalItem, String>>>) {
-                        for (chunk in chunks) {
-                            if (isStopped || Prefs2.backupPaused) return
+        var splitForTimeout = false
+        coroutineScope {
+            var nextList = async(Dispatchers.IO) { if (folders.isNotEmpty()) loadFolder(folders[0]) else emptyList() }
+            var prehashJob: kotlinx.coroutines.Job? = null
+
+            folderLoop@ for ((idx, folder) in folders.withIndex()) {
+                if (isStopped || Prefs2.backupPaused) break
+                if (maybeYieldForTimeout(folder, 0, counts[folder] ?: 0)) { splitForTimeout = true; break }
+                if (!Td.ready) { Td.init(applicationContext); Td.awaitReady(15_000) }
+                keep.acquire()
+                val album = FolderPlan.albumName(folder)
+                val items = nextList.await()
+                val nextName = folders.getOrNull(idx + 1)
+                nextList = async(Dispatchers.IO) { if (nextName != null) loadFolder(nextName) else emptyList() }
+                prehashJob?.cancel()
+                if (nextName != null) {
+                    val upcoming = nextList
+                    prehashJob = launch(Dispatchers.IO) {
+                        val listed = try { upcoming.await() } catch (_: Exception) { emptyList() }
+                        for (i in listed) {
+                            if (isStopped) break
                             coroutineContext.ensureActive()
-                            var last = -1
-                            Repo.uploadGroup(applicationContext, chunk, { i, p ->
-                                val pct = (p * 100).toInt()
-                                if (pct != last) {
-                                    last = pct
-                                    report(done + i, total, "$album • ${folderDone + i}/$folderTotal • ${chunk[i].first.name}", pct)
-                                }
-                            }, chat, topicId, album)
-                            for ((item, _) in chunk) {
-                                when {
-                                    item.mime.startsWith("image/") -> sentPhotos++
-                                    item.mime.startsWith("video/") -> sentVideos++
-                                    else -> sentDocs++
-                                }
-                                sentBytes += item.size
-                                done++; folderDone++; sentInFolder++
-                            }
-                            report(done, total, "$album • $folderDone/$folderTotal • ${chunk.last().first.name}", 100)
+                            try { Repo.localHash(i) } catch (_: Exception) {}
                         }
                     }
+                }
 
-                    for (ev in evs) {
-                        if (isStopped || Prefs2.backupPaused) break
-                        when (ev) {
-                            is Ev.Skip -> {
-                                if (ev.needOrig) missingOrig += ev.item to ev.hash
-                                Dedup.claimHash(seen, ev.hash, ev.item.size)
-                                done++; folderDone++
-                                report(done, total, "$album • $folderDone/$folderTotal • ${ev.item.name}", 100)
+                val secret = folder in Prefs.secretFolders
+                val chat = if (secret) {
+                    if (secretChat == 0L) {
+                        done += items.size
+                        report(done, total, "$album • pasta secreta indisponível", 0)
+                        continue
+                    }
+                    secretChat
+                } else main.id
+                val topicId = Topics.idFor(chat, album)
+                val folderTotal = items.size
+                var folderDone = 0
+                Checkpoint.mark(album, done, total, startedAt = runStarted)
+
+                val evs = Channel<Ev>(32)
+                val producer = launch(Dispatchers.IO) {
+                    try {
+                        for (i in items) {
+                            if (isStopped || Prefs2.backupPaused) break
+                            coroutineContext.ensureActive()
+                            val h = try { Repo.localHash(i) } catch (_: Exception) { "" }
+                            val existing = h.isNotBlank() && (Repo.alreadyOnCloud(h, i.size, i.name) || !Dedup.claimHash(seen, h, i.size))
+                            if (existing || h.isBlank()) {
+                                val needOrig = Prefs.originalPhotos && i.mime.startsWith("image/") &&
+                                    h.isNotBlank() && Db.originalByHash(chat, h) == null && Db.anyByHash(h)?.folder != ORIGINALS_FOLDER &&
+                                    Repo.alreadyOnCloud(h, i.size, i.name)
+                                evs.send(Ev.Skip(i, h, needOrig))
+                            } else evs.send(Ev.Ready(i, h))
+                        }
+                    } finally { evs.close() }
+                }
+
+                val buf = ArrayList<Pair<LocalItem, String>>()
+                val missingOrig = ArrayList<Pair<LocalItem, String>>()
+                var sentInFolder = 0
+
+                suspend fun sendChunks(chunks: List<List<Pair<LocalItem, String>>>): Boolean {
+                    for (chunk in chunks) {
+                        if (isStopped || Prefs2.backupPaused) return false
+                        if (maybeYieldForTimeout(album, folderDone, folderTotal)) return false
+                        coroutineContext.ensureActive()
+                        keep.acquire()
+                        var last = -1
+                        var tries = 0
+                        while (true) {
+                            try {
+                                Repo.uploadGroup(applicationContext, chunk, { i, p ->
+                                    val pct = (p * 100).toInt()
+                                    if (pct != last) {
+                                        last = pct
+                                        report(done + i, total, "$album • ${folderDone + i} de $folderTotal • ${chunk[i].first.name}", pct)
+                                    }
+                                }, chat, topicId, album)
+                                break
+                            } catch (e: CancellationException) { throw e }
+                            catch (e: Exception) {
+                                if (isCancel(e) || Prefs2.backupPaused || isStopped) throw e
+                                if (!StallPolicy.shouldRetry(tries)) throw e
+                                tries++
+                                delay(StallPolicy.backoffMs(tries))
                             }
-                            is Ev.Ready -> {
-                                buf += ev.item to ev.hash
-                                sendChunks(FolderPlan.pullReadyChunks(buf, flush = false, isDoc = ::isDocPair, max = 10))
+                        }
+                        for ((item, _) in chunk) {
+                            when {
+                                item.mime.startsWith("image/") -> sentPhotos++
+                                item.mime.startsWith("video/") -> sentVideos++
+                                else -> sentDocs++
+                            }
+                            sentBytes += item.size
+                            done++; folderDone++; sentInFolder++
+                            Checkpoint.mark(album, done, total, Checkpoint.itemKey(item.path, item.size, item.mtime), runStarted)
+                        }
+                        report(done, total, "$album • $folderDone de $folderTotal • ${chunk.last().first.name}", 100)
+                    }
+                    return true
+                }
+
+                for (ev in evs) {
+                    if (isStopped || Prefs2.backupPaused || splitForTimeout) break
+                    when (ev) {
+                        is Ev.Skip -> {
+                            if (ev.needOrig) missingOrig += ev.item to ev.hash
+                            Dedup.claimHash(seen, ev.hash, ev.item.size)
+                            done++; folderDone++
+                            Checkpoint.mark(album, done, total, Checkpoint.itemKey(ev.item.path, ev.item.size, ev.item.mtime), runStarted)
+                            report(done, total, "$album • $folderDone de $folderTotal • ${ev.item.name}", 100)
+                        }
+                        is Ev.Ready -> {
+                            buf += ev.item to ev.hash
+                            if (!sendChunks(FolderPlan.pullReadyChunks(buf, flush = false, isDoc = ::isDocPair, max = 10))) {
+                                splitForTimeout = true; break
                             }
                         }
                     }
-                    producer.join()
-                    if (!isStopped && !Prefs2.backupPaused) {
-                        sendChunks(FolderPlan.pullReadyChunks(buf, flush = true, isDoc = ::isDocPair, max = 10))
+                }
+                producer.join()
+                if (!isStopped && !Prefs2.backupPaused && !splitForTimeout) {
+                    if (!sendChunks(FolderPlan.pullReadyChunks(buf, flush = true, isDoc = ::isDocPair, max = 10))) {
+                        splitForTimeout = true
+                    } else {
                         if (Prefs.originalPhotos && missingOrig.isNotEmpty()) {
                             try { Repo.uploadOriginalAlbum(applicationContext, missingOrig, { _, _ -> }, chat, topicId) } catch (_: Exception) {}
                         }
@@ -255,30 +409,21 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         }
                     }
                 }
-                prehashJob?.cancel()
             }
-
-            if (isStopped || Prefs2.backupPaused) return Result.success()
-            val summary = backupSummary(sentPhotos, sentVideos, sentDocs, sentBytes)
-            if (sentPhotos + sentVideos + sentDocs > 0) try { Repo.sendSummary(summary, main.id) } catch (_: Exception) {}
-            try { Repo.pushIndex(main.id) } catch (_: Exception) {}
-            if (secretChat != 0L) try { Repo.pushIndex(secretChat) } catch (_: Exception) {}
-            Prefs.lastBackup = System.currentTimeMillis(); Prefs.lastError = ""
-            Result.success(workDataOf("sent" to (sentPhotos + sentVideos + sentDocs), "summary" to summary))
-        } catch (e: java.util.concurrent.CancellationException) {
-            throw e
-        } catch (e: TdException) {
-            if (isStopped || Prefs2.backupPaused || isCancel(e)) return Result.success()
-            Prefs.lastError = e.message ?: "erro"
-            try { setProgress(workDataOf("name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
-            if (e.code == 429 || e.code >= 500) Result.retry() else Result.failure()
-        } catch (e: Exception) {
-            if (isStopped || Prefs2.backupPaused || isCancel(e)) return Result.success()
-            Prefs.lastError = e.message ?: "erro"
-            try { setProgress(workDataOf("name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
-            Result.failure()
-        } finally {
-            Backup.end()
+            prehashJob?.cancel()
         }
+
+        if (splitForTimeout) return Result.success()
+        if (isStopped || Prefs2.backupPaused) {
+            Checkpoint.mark(Checkpoint.load()?.folder ?: "", done, total, startedAt = runStarted)
+            return Result.success()
+        }
+        val summary = backupSummary(sentPhotos, sentVideos, sentDocs, sentBytes)
+        if (sentPhotos + sentVideos + sentDocs > 0) try { Repo.sendSummary(summary, main.id) } catch (_: Exception) {}
+        try { Repo.pushIndex(main.id) } catch (_: Exception) {}
+        if (secretChat != 0L) try { Repo.pushIndex(secretChat) } catch (_: Exception) {}
+        Prefs.lastBackup = System.currentTimeMillis(); Prefs.lastError = ""
+        Checkpoint.clear()
+        return Result.success(workDataOf("sent" to (sentPhotos + sentVideos + sentDocs), "summary" to summary))
     }
 }

@@ -65,4 +65,5 @@ object Prefs2 {
     var watchedTree: String get() = p.getString("wtree", "")!!; set(v) = p.edit().putString("wtree", v).apply()
     var watchedLast: Long get() = p.getLong("wlast", 0); set(v) = p.edit().putLong("wlast", v).apply()
     var watchedError: String get() = p.getString("werr", "")!!; set(v) = p.edit().putString("werr", v).apply()
+    var batteryGuideDismissed: Boolean get() = p.getBoolean("batt_guide_done", false); set(v) = p.edit().putBoolean("batt_guide_done", v).apply()
 }
