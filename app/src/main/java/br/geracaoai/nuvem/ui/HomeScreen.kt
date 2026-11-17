@@ -22,6 +22,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -173,27 +176,14 @@ fun BackupScreen(
         item(key = "fail") { FailedUploadsCard() }
         item(key = "short") {
             GlassCard(radius = 24.dp, padding = 12.dp) {
-                val items = listOf(
-                    Triple("Fotos", Icons.Rounded.Photo to (Nv.Rose to Color(0xFFE056A0))) { onFotos(null, false) },
-                    Triple("Vídeos", Icons.Rounded.PlayCircle to (Nv.Sky to Nv.SkyDeep)) { onFotos(null, true) },
-                    Triple("Restaurar", Icons.Rounded.Download to (Nv.Cyan to Color(0xFF0F9E8D))) { showRestore = true },
-                    Triple("Liberar espaço", Icons.Rounded.CleaningServices to (Nv.Gold to Color(0xFFE08A2C))) { showFree = true },
-                    Triple("Duplicadas", Icons.Rounded.ContentCopy to (Nv.Violet to Color(0xFF7A5CC8))) { showDups = true },
-                    Triple("Ajustes", Icons.Rounded.Settings to (Color(0xFF8E9BB8) to Color(0xFF4A5570))) { onSettings() },
+                HomeShortcutRow(
+                    onFotos = { onFotos(null, false) },
+                    onVideos = { onFotos(null, true) },
+                    onRestore = { showRestore = true },
+                    onFree = { showFree = true },
+                    onDups = { showDups = true },
+                    onSettings = { onSettings() },
                 )
-                items.chunked(3).forEach { row ->
-                    Row(Modifier.fillMaxWidth()) {
-                        row.forEach { (label, iconCol, action) ->
-                            val (icon, cols) = iconCol
-                            Column(Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).clickable { action() }.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                GlowIcon(icon, cols.first, cols.second, 52.dp)
-                                Spacer(Modifier.height(8.dp))
-                                Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 2)
-                            }
-                        }
-                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
             }
         }
         item(key = "fh") {
@@ -237,8 +227,16 @@ fun BackupScreen(
             }
         }
     }
-    if (showFree) ModalBottomSheet({ showFree = false }) { Column(Modifier.padding(16.dp).navigationBarsPadding()) { FreeUpCard(); Spacer(Modifier.height(12.dp)) } }
-    if (showDups) ModalBottomSheet({ showDups = false }) { Column(Modifier.padding(16.dp).navigationBarsPadding()) { Text("Duplicadas", style = MaterialTheme.typography.titleLarge); DupCleanRow(); Spacer(Modifier.height(24.dp)) } }
+    if (showFree) FreeUpSheet({ showFree = false })
+    if (showDups) ModalBottomSheet({ showDups = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.testTag(FeatureTags.PANE_DUPLICADAS).padding(16.dp).navigationBarsPadding()) {
+            Text("Duplicadas", style = MaterialTheme.typography.titleLarge)
+            Text("Acha fotos, vídeos e originais repetidos no Telegram e apaga, deixando a cópia mais antiga.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            DupCleanRow()
+            Spacer(Modifier.height(24.dp))
+        }
+    }
     if (showRestore) RestoreSheet(folders.filter { it.cloudCount > 0 }.map { it.name }, { showRestore = false })
 }
 
@@ -330,7 +328,7 @@ private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
     }
     ModalBottomSheet(onClose) {
         Column(Modifier.padding(20.dp).navigationBarsPadding()) {
-            Text("Restaurar álbum", style = MaterialTheme.typography.titleLarge)
+            Text("Restaurar álbum", style = MaterialTheme.typography.titleLarge, modifier = Modifier.testTag(FeatureTags.PANE_RESTAURAR))
             Text("Baixa o álbum de volta para a pasta original do celular.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(12.dp))
             if (albums.isEmpty()) Text("Nada na nuvem ainda.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -353,6 +351,41 @@ private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
         confirmButton = { Button({ pending = null; doRestore(name) }) { Text("Restaurar") } },
         dismissButton = { TextButton({ pending = null }) { Text("Cancelar") } },
     )
+}
+
+
+@Composable
+fun HomeShortcutRow(
+    onFotos: () -> Unit,
+    onVideos: () -> Unit,
+    onRestore: () -> Unit,
+    onFree: () -> Unit,
+    onDups: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    val items = listOf(
+        Triple("Fotos", Icons.Rounded.Photo to (Nv.Rose to Color(0xFFE056A0)), onFotos),
+        Triple("Vídeos", Icons.Rounded.PlayCircle to (Nv.Sky to Nv.SkyDeep), onVideos),
+        Triple("Restaurar", Icons.Rounded.Download to (Nv.Cyan to Color(0xFF0F9E8D)), onRestore),
+        Triple("Liberar espaço", Icons.Rounded.CleaningServices to (Nv.Gold to Color(0xFFE08A2C)), onFree),
+        Triple("Duplicadas", Icons.Rounded.ContentCopy to (Nv.Violet to Color(0xFF7A5CC8)), onDups),
+        Triple("Ajustes", Icons.Rounded.Settings to (Color(0xFF8E9BB8) to Color(0xFF4A5570)), onSettings),
+    )
+    val tags = listOf(FeatureTags.SHORTCUT_FOTOS, FeatureTags.SHORTCUT_VIDEOS, FeatureTags.SHORTCUT_RESTAURAR, FeatureTags.SHORTCUT_LIBERAR, FeatureTags.SHORTCUT_DUPLICADAS, FeatureTags.SHORTCUT_AJUSTES)
+    items.zip(tags).chunked(3).forEach { row ->
+        Row(Modifier.fillMaxWidth()) {
+            row.forEach { (item, tag) ->
+                val (label, iconCol, action) = item
+                val (icon, cols) = iconCol
+                Column(Modifier.weight(1f).testTag(tag).clip(RoundedCornerShape(16.dp)).clickable { action() }.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    GlowIcon(icon, cols.first, cols.second, 52.dp)
+                    Spacer(Modifier.height(8.dp))
+                    Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 2)
+                }
+            }
+            repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
 }
 
 private data class Quad<A, B, C, D, E, F>(val a: A, val b: B, val c: C, val d: D, val e: E, val f: F)

@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -178,16 +179,19 @@ fun WatchedScreen() {
 
 @Composable
 private fun SafCard(attempt: Int, err: String?, onGrant: () -> Unit) {
-    ElevatedCard(Modifier.fillMaxWidth().padding(4.dp), colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+    val ctx = LocalContext.current
+    val folder = SafAccess.treeHint(ctx)
+    val total = SafAccess.candidateIds(ctx).size
+    ElevatedCard(Modifier.fillMaxWidth().padding(4.dp).testTag(FeatureTags.SAF_CARD), colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
         Column(Modifier.padding(20.dp)) {
             Text("Falta só um passo", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            Text("Para copiar os vídeos que você assiste, o Nuvem precisa ler a pasta do Telegram. É uma vez só.\n\nNa próxima tela, toque em \"Usar esta pasta\" → \"Permitir\".",
+            Text("Para copiar os vídeos que você assiste, o Nuvem precisa ler a pasta do Telegram. É uma vez só.\n\nO seletor já abre na pasta:\n$folder\n\nToque em USAR ESTA PASTA > Permitir.",
                 style = MaterialTheme.typography.bodyMedium)
-            err?.let { Spacer(Modifier.height(8.dp)); Text(it + if (attempt > 0) "\nToque de novo: vou tentar outro modo (${attempt % SafAccess.candidates().size + 1}/${SafAccess.candidates().size})." else "",
-                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Spacer(Modifier.height(14.dp))
-            Button(onGrant, Modifier.fillMaxWidth().height(56.dp)) { Icon(Icons.Rounded.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Liberar pasta do Telegram", style = MaterialTheme.typography.titleMedium) }
+            err?.let { Spacer(Modifier.height(8.dp)); Text(it + if (attempt > 0) "\nToque de novo: vou tentar outro caminho (${attempt % total + 1}/$total)." else "",
+                color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(16.dp))
+            Button(onGrant, Modifier.fillMaxWidth().height(56.dp).testTag(FeatureTags.SAF_GRANT)) { Icon(Icons.Rounded.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text("Liberar pasta do Telegram", style = MaterialTheme.typography.titleMedium) }
         }
     }
 }

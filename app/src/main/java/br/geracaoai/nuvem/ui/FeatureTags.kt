@@ -1,0 +1,28 @@
+package br.geracaoai.nuvem.ui
+
+object FeatureTags {
+    const val SHORTCUT_FOTOS = "shortcut_fotos"
+    const val SHORTCUT_VIDEOS = "shortcut_videos"
+    const val SHORTCUT_RESTAURAR = "shortcut_restaurar"
+    const val SHORTCUT_LIBERAR = "shortcut_liberar_espaco"
+    const val SHORTCUT_DUPLICADAS = "shortcut_duplicadas"
+    const val SHORTCUT_AJUSTES = "shortcut_ajustes"
+    const val PANE_LIBERAR = "pane_liberar_espaco"
+    const val PANE_DUPLICADAS = "pane_duplicadas"
+    const val PANE_RESTAURAR = "pane_restaurar"
+    const val PANE_FOTOS = "pane_fotos"
+    const val PANE_VIDEOS = "pane_videos"
+    const val PANE_AJUSTES = "pane_ajustes"
+    const val SETTINGS_DESTINO = "settings_destino"
+    const val SETTINGS_EMAIL = "settings_email"
+    const val SETTINGS_SESSAO = "settings_sessao"
+    const val SETTINGS_LEGENDAS = "settings_legendas"
+    const val SETTINGS_DUPLICADAS = "settings_duplicadas"
+    const val SETTINGS_SECRETO = "settings_secreto"
+    const val SETTINGS_REINDEXAR = "settings_reindexar"
+    const val SETTINGS_TROCAR_DESTINO = "settings_trocar_destino"
+    const val SETTINGS_SAIR = "settings_sair"
+    const val SETTINGS_LIBERAR = "settings_liberar_espaco"
+    const val SAF_CARD = "saf_falta_passo"
+    const val SAF_GRANT = "saf_liberar_pasta"
+}

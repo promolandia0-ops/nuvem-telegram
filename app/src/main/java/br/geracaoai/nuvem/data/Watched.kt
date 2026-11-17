@@ -30,7 +30,7 @@ object Watched {
 
     fun roots(): List<String> {
         val ext = Environment.getExternalStorageDirectory().absolutePath
-        return PKGS.flatMap { listOf("$ext/Android/data/$it/cache", "$ext/Android/data/$it/files") } + listOf("$ext/Telegram", "$ext/Movies/Telegram", "$ext/Download/Telegram")
+        return PKGS.flatMap { listOf("$ext/Android/data/$it/cache", "$ext/Android/data/$it/files", "$ext/Android/media/$it/Telegram", "$ext/Android/media/$it") } + listOf("$ext/Telegram", "$ext/Movies/Telegram", "$ext/Download/Telegram")
     }
 
     /** Decide pelo nome + "magic bytes" (ftyp = MP4/MOV, EBML = MKV/WebM). Retorna o mime ou null. */

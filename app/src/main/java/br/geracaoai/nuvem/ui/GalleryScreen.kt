@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,6 +65,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
     var confirmDel by remember { mutableStateOf(false) }
     var restoring by remember { mutableStateOf(false) }
     var restoreMsg by remember { mutableStateOf<String?>(null) }
+    var pendingRestore by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val showing = innerFolder
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { try { Repo.reconcileCloud() } catch (_: Exception) {} } }
@@ -111,15 +113,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
                 IconButton({ selected = items.map { it.msgId }.toSet() }) { Icon(Icons.Rounded.SelectAll, "Tudo") }
                 IconButton({ selected = emptySet() }) { Icon(Icons.Rounded.Close, "Cancelar") }
             } else if (showing != null) {
-                TextButton(enabled = !restoring, onClick = {
-                    restoring = true
-                    val alb = showing
-                    scope.launch {
-                        val (ok, total) = try { Repo.restoreAlbum(ctx, alb) } catch (_: Exception) { 0 to items.size }
-                        restoreMsg = "Restaurados $ok de $total na pasta original (ou em Nuvem/${folderLabel(alb)})."
-                        restoring = false
-                    }
-                }) { Text(if (restoring) "Restaurando…" else "Restaurar") }
+                TextButton(enabled = !restoring, onClick = { pendingRestore = showing }) { Text(if (restoring) "Restaurando…" else "Restaurar") }
             }
         }
         if (folderGrid || (showing == null && !videosOnly)) {
@@ -143,6 +137,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
                     EmptyCloud(if (query.isBlank()) "Nada na nuvem ainda" else "Nada encontrado", if (query.isBlank()) "Escolha pastas no Início e toque em Iniciar." else "Tente outro termo de busca.")
                 }
             } else if (folderGrid) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpCard() }
                 item(span = { GridItemSpan(maxLineSpan) }, key = "secret") { SecretAlbumsEntry(onOpen) }
                 items(albums, key = { "al${it.first}" }) { (album, albumItems) ->
                     GlassCard(Modifier.animateItem(), onClick = { innerFolder = album }, radius = 20.dp, padding = 8.dp) {
@@ -193,6 +188,22 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
             }
         }
     }
+    val alb = pendingRestore
+    if (alb != null) AlertDialog(
+        { pendingRestore = null },
+        title = { Text("Restaurar ${folderLabel(alb)}?") },
+        text = { Text("Os arquivos voltam para a pasta original do celular. Nada é apagado da nuvem.") },
+        confirmButton = { Button({
+            pendingRestore = null; restoring = true
+            scope.launch {
+                val (ok, total) = try { Repo.restoreAlbum(ctx, alb) } catch (_: Exception) { 0 to items.size }
+                ActionLog.add("restaurar", "Restaurou $ok de $total em ${folderLabel(alb)}", ok, 0)
+                restoreMsg = "Restaurados $ok de $total na pasta original (ou em Nuvem/${folderLabel(alb)})."
+                restoring = false
+            }
+        }) { Text("Restaurar") } },
+        dismissButton = { TextButton({ pendingRestore = null }) { Text("Cancelar") } },
+    )
     restoreMsg?.let { msg -> AlertDialog({ restoreMsg = null }, confirmButton = { TextButton({ restoreMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
     if (confirmDel) AlertDialog({ confirmDel = false }, title = { Text("Apagar ${selected.size} itens da nuvem?") },
         text = { Text("Eles serão apagados permanentemente do Telegram. Se não houver cópia no celular, serão perdidos para sempre.") },
@@ -225,9 +236,19 @@ fun Thumb(ci: CloudItem, modifier: Modifier) {
     }
 }
 
-/** Card estilo Google Fotos: "Liberar armazenamento". Só conta arquivos com hash+tamanho já confirmados na nuvem. */
+/** Tela de Liberar espaço: sempre mostra título, carregando, vazio ou a lista. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FreeUpCard() {
+fun FreeUpSheet(onClose: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        FreeUpCard(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp).testTag(FeatureTags.PANE_LIBERAR))
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+/** Card/tela de "Liberar espaço". Só conta arquivos com hash+tamanho já confirmados na nuvem. Nunca fica em branco. */
+@Composable
+fun FreeUpCard(modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val ver by Db.version.collectAsStateWithLifecycle()
@@ -237,7 +258,7 @@ fun FreeUpCard() {
     var refresh by remember { mutableIntStateOf(0) }
     var checking by remember { mutableStateOf(true) }
     LaunchedEffect(ver, running, refresh) {
-        if (running) return@LaunchedEffect
+        if (running) { checking = false; return@LaunchedEffect }
         checking = true
         free = withContext(Dispatchers.IO) {
             try { Repo.reconcileCloud() } catch (_: Exception) {}
@@ -258,28 +279,19 @@ fun FreeUpCard() {
         refresh++
     }
     val f = free
-    AnimatedVisibility(f != null && f.items.isNotEmpty() && !running && !checking, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-        if (f != null) ElevatedCard(Modifier.fillMaxWidth().padding(8.dp)) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                    Icon(Icons.Rounded.CleaningServices, null, Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer) }
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Liberar armazenamento", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("${f.items.size} itens já salvos no Telegram • ${fmtBytes(f.bytes)}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+    FreeUpBody(
+        checking = checking, running = running,
+        itemCount = f?.items?.size ?: 0, bytes = f?.bytes ?: 0L,
+        onLiberar = {
+            val cur = f ?: return@FreeUpBody
+            phase = "verify"; progress = 0
+            scope.launch {
+                verified = Repo.verifyForDelete(cur.items) { progress = it }
+                phase = "confirm"
             }
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp), horizontalArrangement = Arrangement.End) {
-                Button({
-                    phase = "verify"; progress = 0
-                    scope.launch {
-                        verified = Repo.verifyForDelete(f.items) { progress = it }
-                        phase = "confirm"
-                    }
-                }) { Text("Liberar ${fmtBytes(f.bytes)}") }
-            }
-        }
-    }
+        },
+        modifier = modifier,
+    )
     if (phase == "verify" && f != null) AlertDialog({}, confirmButton = {}, title = { Text("Verificando backup…") }, text = {
         Column { Text("Conferindo hash e tamanho de cada arquivo com o Telegram (${progress}/${f.items.size})."); Spacer(Modifier.height(12.dp))
             LinearProgressIndicator({ progress / f.items.size.coerceAtLeast(1).toFloat() }, Modifier.fillMaxWidth()) } })
@@ -299,4 +311,38 @@ fun FreeUpCard() {
             dismissButton = { TextButton({ phase = null }) { Text("Cancelar") } })
     }
     result?.let { AlertDialog({ result = null }, confirmButton = { TextButton({ result = null }) { Text("OK") } }, text = { Text(it) }) }
+}
+
+@Composable
+fun FreeUpBody(
+    checking: Boolean,
+    running: Boolean,
+    itemCount: Int,
+    bytes: Long,
+    onLiberar: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth().testTag(FeatureTags.PANE_LIBERAR)) {
+        Text("Liberar espaço", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        Text("Só entram arquivos que já conferi no Telegram. Eles vão para a lixeira do celular (dá pra recuperar por uns 30 dias). Nada some da nuvem.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        when {
+            running -> Text("Espere o backup terminar pra liberar espaço.", style = MaterialTheme.typography.bodyMedium)
+            checking -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Procurando arquivos já salvos no Telegram…", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            itemCount <= 0 -> Text("Nada pra liberar agora. Só aparece o que já está no seu Telegram com o mesmo arquivo e tamanho.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> {
+                Text("$itemCount itens já salvos no Telegram • ${fmtBytes(bytes)}", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(12.dp))
+                Button(onLiberar) { Text("Liberar ${fmtBytes(bytes)}") }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
 }

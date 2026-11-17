@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,8 +72,8 @@ fun SwitchRow(title: String, sub: String, v: Boolean, on: (Boolean) -> Unit) =
 
 
 @Composable
-fun SettingsLine(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, enabled: Boolean = true, onClick: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier).padding(horizontal = 10.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+fun SettingsLine(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, enabled: Boolean = true, tag: String? = null, onClick: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().then(if (tag != null) Modifier.testTag(tag) else Modifier).clip(RoundedCornerShape(16.dp)).then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier).padding(horizontal = 10.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, Modifier.size(22.dp), tint = Nv.Sky)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -97,6 +98,7 @@ fun SettingsScreen(onLogout: () -> Unit) {
     var emailBusy by remember { mutableStateOf(false) }
     var destConfirm by remember { mutableStateOf(false) }
     var destResend by remember { mutableStateOf(false) }
+    var showFree by remember { mutableStateOf(false) }
     val premium by Td.isPremium.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         try {
@@ -109,9 +111,9 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item {
             SectionTitle("Conta")
             GlassCard(padding = 8.dp) {
-                SettingsLine(Icons.Rounded.Cloud, "Destino", (Prefs.chatTitle.ifBlank { "—" }) + " • " + DestKind.label(DestKind.effective()) + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo") { destConfirm = true; destResend = false }
-                SettingsLine(Icons.Rounded.Email, "E-mail de login", if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.", onClick = { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" })
-                SettingsLine(Icons.Rounded.PhoneAndroid, "Sessão neste celular", "Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.")
+                SettingsLine(Icons.Rounded.Cloud, "Destino", (Prefs.chatTitle.ifBlank { "—" }) + " • " + DestKind.label(DestKind.effective()) + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo", tag = FeatureTags.SETTINGS_DESTINO) { destConfirm = true; destResend = false }
+                SettingsLine(Icons.Rounded.Email, "E-mail de login", if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.", tag = FeatureTags.SETTINGS_EMAIL, onClick = { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" })
+                SettingsLine(Icons.Rounded.PhoneAndroid, "Sessão neste celular", "Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.", tag = FeatureTags.SETTINGS_SESSAO)
             }
         }
         item {
@@ -131,7 +133,7 @@ fun SettingsScreen(onLogout: () -> Unit) {
             GlassCard(padding = 8.dp) {
                 var cleaning by remember { mutableStateOf(false) }
                 var cleanMsg by remember { mutableStateOf<String?>(null) }
-                SettingsLine(Icons.Rounded.CleaningServices, "Limpar legendas antigas", cleanMsg ?: if (cleaning) "Editando mensagens…" else "Tira o texto enorme das que já subiram e deixa só a hashtag curta", enabled = !cleaning) {
+                SettingsLine(Icons.Rounded.CleaningServices, "Limpar legendas antigas", cleanMsg ?: if (cleaning) "Editando mensagens…" else "Tira o texto enorme das que já subiram e deixa só a hashtag curta", enabled = !cleaning, tag = FeatureTags.SETTINGS_LEGENDAS) {
                     cleaning = true; cleanMsg = null
                     scope.launch {
                         try {
@@ -141,9 +143,10 @@ fun SettingsScreen(onLogout: () -> Unit) {
                         cleaning = false
                     }
                 }
-                DupCleanRow()
+                SettingsLine(Icons.Rounded.CleaningServices, "Liberar espaço", "Arquivos já no Telegram vão para a lixeira do celular", tag = FeatureTags.SETTINGS_LIBERAR) { showFree = true }
+                Column(Modifier.testTag(FeatureTags.SETTINGS_DUPLICADAS)) { DupCleanRow() }
                 SecretSettingsRow()
-                SettingsLine(Icons.Rounded.Sync, "Reindexar nuvem", if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)", enabled = !syncing) {
+                SettingsLine(Icons.Rounded.Sync, "Reindexar nuvem", if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)", enabled = !syncing, tag = FeatureTags.SETTINGS_REINDEXAR) {
                     syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false }
                 }
             }
@@ -151,12 +154,13 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item {
             SectionTitle("Sessão")
             GlassCard(padding = 8.dp) {
-                SettingsLine(Icons.Rounded.SwapHoriz, "Trocar destino", "Escolher outro grupo, grupo com tópicos, canal ou Mensagens Salvas") { destConfirm = true; destResend = false }
-                SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.") { confirmOut = true }
+                SettingsLine(Icons.Rounded.SwapHoriz, "Trocar destino", "Escolher outro grupo, grupo com tópicos, canal ou Mensagens Salvas", tag = FeatureTags.SETTINGS_TROCAR_DESTINO) { destConfirm = true; destResend = false }
+                SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.", tag = FeatureTags.SETTINGS_SAIR) { confirmOut = true }
             }
         }
-        item { Text("Nuvem 1.6.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
+        item { Text("Nuvem 1.6.2 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
     }
+    if (showFree) FreeUpSheet({ showFree = false })
     if (destConfirm) AlertDialog(
         { destConfirm = false },
         title = { Text("Trocar destino?") },
