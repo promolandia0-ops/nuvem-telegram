@@ -129,6 +129,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             data class Target(val chatId: Long, val topic: String)
             val groups = LinkedHashMap<Target, ArrayList<Pair<LocalItem, String>>>()
             val missingOrig = LinkedHashMap<Target, ArrayList<Pair<LocalItem, String>>>()
+            val seen = HashSet<String>()
 
             for (i in todo.sortedBy { it.taken }) {
                 if (isStopped || Prefs2.backupPaused) break
@@ -143,10 +144,14 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 val (dur, w, hgt) = try { Repo.mediaHints(i) } catch (_: Exception) { Triple(0L, 0, 0) }
                 val topic = Classify.topicOf(i, dur, w, hgt, Prefs.smartSort)
                 val target = Target(chat, topic)
-                if (existing != null) {
-                    if (Prefs.originalPhotos && i.mime.startsWith("image/") && Db.anyByHash(h)?.folder != ORIGINALS_FOLDER && Db.originalByHash(chat, h) == null) {
+                if (existing != null || Repo.alreadyOnCloud(h, i.size, i.name)) {
+                    if (Prefs.originalPhotos && i.mime.startsWith("image/") && Db.originalByHash(chat, h) == null && Db.anyByHash(h)?.folder != ORIGINALS_FOLDER) {
                         missingOrig.getOrPut(target) { ArrayList() } += i to h
                     }
+                    Dedup.claimHash(seen, h, i.size)
+                    done++; report(done, total, i.name, 100); continue
+                }
+                if (!Dedup.claimHash(seen, h, i.size)) {
                     done++; report(done, total, i.name, 100); continue
                 }
                 groups.getOrPut(target) { ArrayList() } += i to h

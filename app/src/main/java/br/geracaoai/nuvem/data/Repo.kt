@@ -20,7 +20,7 @@ import java.io.FileOutputStream
 data class Freeable(val items: List<LocalItem>, val bytes: Long)
 
 /** Arquivo remoto de uma mensagem (foto maior, vídeo ou documento). */
-data class RemoteFile(val file: TdApi.File, val name: String, val mime: String, val mini: ByteArray?, val isPhoto: Boolean)
+data class RemoteFile(val file: TdApi.File, val name: String, val mime: String, val mini: ByteArray?, val isPhoto: Boolean, val uniqueId: String = "")
 
 object Repo {
     const val CHANNEL_TITLE = "Nuvem"
@@ -46,16 +46,16 @@ object Repo {
 
     fun remoteOf(m: TdApi.Message): RemoteFile? = when (val c = m.content) {
         is TdApi.MessageDocument -> c.document?.document?.let {
-            RemoteFile(it, c.document.fileName ?: "", c.document.mimeType ?: "", c.document.minithumbnail?.data, false)
+            RemoteFile(it, c.document.fileName ?: "", c.document.mimeType ?: "", c.document.minithumbnail?.data, false, it.remote?.uniqueId ?: "")
         }
         is TdApi.MessagePhoto -> largestPhoto(c.photo)?.let { s ->
-            RemoteFile(s.photo, "", "image/jpeg", c.photo.minithumbnail?.data, true)
+            RemoteFile(s.photo, "", "image/jpeg", c.photo.minithumbnail?.data, true, s.photo.remote?.uniqueId ?: "")
         }
         is TdApi.MessageVideo -> c.video?.video?.let {
-            RemoteFile(it, c.video.fileName ?: "", c.video.mimeType ?: "video/mp4", c.video.minithumbnail?.data, false)
+            RemoteFile(it, c.video.fileName ?: "", c.video.mimeType ?: "video/mp4", c.video.minithumbnail?.data, false, it.remote?.uniqueId ?: "")
         }
         is TdApi.MessageAnimation -> c.animation?.animation?.let {
-            RemoteFile(it, c.animation.fileName ?: "", c.animation.mimeType ?: "", c.animation.minithumbnail?.data, false)
+            RemoteFile(it, c.animation.fileName ?: "", c.animation.mimeType ?: "", c.animation.minithumbnail?.data, false, it.remote?.uniqueId ?: "")
         }
         else -> null
     }
@@ -126,8 +126,13 @@ object Repo {
     suspend fun createSecretChat(): TdApi.Chat = createSupergroup("Nuvem Secreto", "Álbum secreto do app Nuvem. Não apague.")
     suspend fun savedMessages(): TdApi.Chat { val me = Td.send(TdApi.GetMe(), 20_000); return Td.send(TdApi.CreatePrivateChat(me.id, false), 20_000) }
     fun useChat(c: TdApi.Chat) {
-        if (Prefs.chatId != c.id) { Prefs.indexMsgId = 0; Prefs.topicMap = "" }
+        if (Prefs.chatId != 0L && Prefs.chatId != c.id) {
+            Prefs.rememberChat(Prefs.chatId)
+            if (Prefs.legacyChatId == 0L) Prefs.legacyChatId = Prefs.chatId
+            Prefs.indexMsgId = 0; Prefs.topicMap = ""
+        }
         Prefs.chatId = c.id; Prefs.chatTitle = c.title
+        Prefs.rememberChat(c.id)
     }
 
     /** Garante um destino válido: reabre o salvo, ou acha/cria o grupo “Nuvem” com tópicos. */
@@ -195,7 +200,7 @@ object Repo {
         val meta = Meta.parse(captionOf(m))
         val known = if (meta == null) Db.getCloud(m.chatId, m.id) else null
         if (meta == null && known != null && known.hash.isNotBlank()) {
-            return if (known.mini == null && r.mini != null) known.copy(mini = r.mini) else known
+            return known.copy(mini = known.mini ?: r.mini, uniqueId = known.uniqueId.ifBlank { r.uniqueId })
         }
         val folder = when {
             meta?.original == true -> ORIGINALS_FOLDER
@@ -213,6 +218,7 @@ object Repo {
             meta?.path?.ifBlank { null } ?: known?.path ?: "",
             meta?.hash?.ifBlank { null } ?: known?.hash ?: "",
             r.mini ?: known?.mini,
+            r.uniqueId.ifBlank { known?.uniqueId ?: "" },
         )
     }
 
@@ -220,7 +226,7 @@ object Repo {
         val r = remoteOf(msg)
         val folder = if (meta.original) ORIGINALS_FOLDER else meta.folder.ifBlank { "Outros" }
         Db.putCloud(CloudItem(msg.id, msg.chatId, meta.name, meta.mime.ifBlank { r?.mime ?: "" }, meta.size,
-            meta.taken, folder, meta.path, meta.hash, r?.mini))
+            meta.taken, folder, meta.path, meta.hash, r?.mini, r?.uniqueId ?: ""))
         Db.bump()
     }
 
@@ -229,7 +235,7 @@ object Repo {
         val dest = try { ensureDestination() } catch (e: Exception) {
             if (Prefs.chatId == 0L) return@withContext else throw e
         }
-        val chats = (listOf(dest.id) + Prefs.destChats()).filter { it != 0L }.distinct()
+        val chats = (listOf(dest.id) + Prefs.allKnownChats()).filter { it != 0L }.distinct()
         for (chat in chats) {
             if (full) Db.clearCloud(chat)
             try { pullIndex(chat) } catch (_: Exception) {}
@@ -382,25 +388,44 @@ object Repo {
         flushMedia(); flushDocs(); return out
     }
 
-    /** Envia um lote (álbum de até 10). Se falhar, envia um a um, sem reenviar o que já saiu. */
+    /** Já está na nuvem (hash, ou nome+tamanho se o hash ainda não estiver no índice). */
+    fun alreadyOnCloud(hash: String, size: Long, name: String = ""): Boolean {
+        if (hash.isNotBlank() && (Db.anyByHash(hash, size) != null || Db.anyByHash(hash) != null)) return true
+        if (name.isNotBlank() && name != "item" && Db.anyByNameSize(name, size) != null) return true
+        return false
+    }
+
+    /** Envia um lote (álbum de até 10). Não reenvia se o álbum já tiver saído (ex.: timeout). */
     suspend fun uploadGroup(c: Context, batch: List<Pair<LocalItem, String>>, onProgress: (Int, Float) -> Unit, chatId: Long = Prefs.chatId, topicId: Int = 0, folder: String = batch.first().first.bucket): List<TdApi.Message> {
-        if (batch.size <= 1) {
-            val (i, h) = batch.first(); return listOf(upload(c, i, h, { onProgress(0, it) }, chatId, topicId, folder))
+        val fresh = batch.filter { !alreadyOnCloud(it.second, it.first.size, it.first.name) }
+        if (fresh.isEmpty()) return emptyList()
+        if (fresh.size <= 1) {
+            val (i, h) = fresh.first(); return listOf(upload(c, i, h, { onProgress(0, it) }, chatId, topicId, folder))
         }
-        val thumbs = batch.map { thumbFor(c, it.first) }
+        val thumbs = fresh.map { thumbFor(c, it.first) }
         try {
-            val contents = batch.mapIndexed { idx, (i, _) ->
+            val contents = fresh.mapIndexed { idx, (i, _) ->
                 val kind = Meta.sendKind(i.mime.ifBlank { Meta.mimeFromName(i.name) }, i.size)
                 val cap = if (idx == 0) captionFor(i, folder) else ""
                 buildContent(kind, i.path, cap, thumbs[idx])
             }
-            val metas = batch.map { (i, h) -> metaOf(i, h) }
+            val metas = fresh.map { (i, h) -> metaOf(i, h) }
+            var timedOut = false
             val started = try { startAlbum(contents, chatId, topicId) }
             catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (_: Exception) { null }
-            val msgs = if (started == null) {
-                batch.mapIndexed { idx, (i, h) -> upload(c, i, h, { onProgress(idx, it) }, chatId, topicId, folder) }
-            } else awaitAlbum(started, onProgress, metas, chatId)
+            catch (e: TdException) {
+                if (e.code == 408) { timedOut = true; null } else null
+            } catch (_: Exception) { null }
+            val msgs = if (started != null) {
+                awaitAlbum(started, onProgress, metas, chatId)
+            } else if (timedOut) {
+                recoverAlbum(chatId, topicId, metas) ?: emptyList()
+            } else {
+                fresh.mapNotNull { (i, h) ->
+                    if (alreadyOnCloud(h, i.size, i.name)) null
+                    else upload(c, i, h, { onProgress(fresh.indexOf(i to h), it) }, chatId, topicId, folder)
+                }
+            }
             if (Prefs.originalPhotos) {
                 val need = batch.zip(msgs).filter { (pair, msg) ->
                     msg.content is TdApi.MessagePhoto && Db.originalByHash(chatId, pair.second) == null &&
@@ -544,6 +569,23 @@ object Repo {
         val tmps = sent.messages
         if (tmps.isNullOrEmpty()) throw TdException(0, "Álbum vazio")
         return tmps
+    }
+
+    /** Depois de um timeout no SendMessageAlbum, tenta achar o lote já enviado (sem reenviar). */
+    private suspend fun recoverAlbum(chatId: Long, topicId: Int, metas: List<Meta>): List<TdApi.Message>? {
+        kotlinx.coroutines.delay(1_500)
+        val r = try {
+            if (topicId != 0) Td.send(TdApi.GetForumTopicHistory(chatId, topicId, 0, 0, 40), 20_000)
+            else Td.send(TdApi.GetChatHistory().apply { this.chatId = chatId; fromMessageId = 0; offset = 0; limit = 40; onlyLocal = false }, 20_000)
+        } catch (_: Exception) { return null }
+        val cutoff = (System.currentTimeMillis() / 1000L - 180).toInt()
+        val media = (r.messages ?: emptyArray()).filter { m ->
+            m.date >= cutoff && remoteOf(m) != null && !isIndexMessage(m)
+        }.sortedBy { it.id }
+        if (media.size < metas.size) return null
+        val slice = media.takeLast(metas.size)
+        slice.zip(metas).forEach { (msg, meta) -> remember(msg, meta) }
+        return slice
     }
 
     private suspend fun awaitAlbum(tmps: Array<TdApi.Message>, onProgress: (Int, Float) -> Unit, metas: List<Meta>? = null, chatId: Long = Prefs.chatId): List<TdApi.Message> {
@@ -840,6 +882,79 @@ object Repo {
             try { pushIndex(chat) } catch (_: Exception) {}
         }
         cleaned
+    }
+
+
+    fun toDupItem(m: TdApi.Message): DupItem? {
+        val ci = toCloud(m) ?: return null
+        val r = remoteOf(m)
+        return DupItem(
+            m.id, m.chatId, ci.name, ci.mime, ci.size, ci.taken, m.date, ci.folder, ci.hash,
+            r?.uniqueId?.ifBlank { ci.uniqueId } ?: ci.uniqueId,
+            ci.folder == ORIGINALS_FOLDER || (Meta.parse(captionOf(m))?.original == true),
+        )
+    }
+
+    suspend fun collectDupItems(onProgress: ((Int) -> Unit)? = null): List<DupItem> = withContext(Dispatchers.IO) {
+        try { syncIndex { onProgress?.invoke(it) } } catch (_: Exception) {}
+        val out = ArrayList<DupItem>()
+        val chats = Prefs.allKnownChats()
+        for (chat in chats) {
+            val topics = try { Topics.list(chat) } catch (_: Exception) { emptyList() }
+            val topicIds = if (topics.isEmpty()) listOf(0) else topics.map { it.forumTopicId }
+            for (topicId in topicIds) {
+                var from = 0L; var emptyRounds = 0; var pages = 0
+                while (true) {
+                    val r = try {
+                        if (topicId != 0) Td.send(TdApi.GetForumTopicHistory(chat, topicId, from, 0, 100), 20_000)
+                        else Td.send(TdApi.GetChatHistory().apply { chatId = chat; fromMessageId = from; offset = 0; limit = 100; onlyLocal = false }, 20_000)
+                    } catch (e: TdException) {
+                        if (e.code == 408 && from == 0L && pages == 0) break else throw e
+                    }
+                    val msgs = r.messages ?: emptyArray()
+                    for (m in msgs) toDupItem(m)?.let { out += it }
+                    onProgress?.invoke(out.size)
+                    val s = ChatHistoryWalk.next(from, emptyRounds, msgs.map { it.id }.toLongArray(), true, 0, pages)
+                    from = s.nextFromId; emptyRounds = s.emptyRounds; pages = s.pages
+                    if (s.done) break
+                }
+            }
+        }
+        out
+    }
+
+    suspend fun scanDuplicates(onProgress: ((Int) -> Unit)? = null): DupPlan =
+        Dedup.plan(collectDupItems(onProgress))
+
+    suspend fun deleteDuplicates(plan: DupPlan, onProgress: ((Int, Int) -> Unit)? = null): Int = withContext(Dispatchers.IO) {
+        val byChat = plan.delete.groupBy { it.chatId }
+        var done = 0
+        val total = plan.delete.size
+        for ((chat, items) in byChat) {
+            for (chunk in items.map { it.msgId }.distinct().chunked(100)) {
+                var pending = chunk
+                var tries = 0
+                while (pending.isNotEmpty() && tries < 5) {
+                    try {
+                        Td.send(TdApi.DeleteMessages(chat, pending.toLongArray(), true), 30_000)
+                        break
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e
+                    } catch (e: TdException) {
+                        val sec = floodWaitSeconds(e.message) ?: if (e.code == 429) 5 else null
+                        if (sec != null) {
+                            kotlinx.coroutines.delay((sec + 1) * 1000L)
+                            tries++
+                        } else throw e
+                    }
+                }
+                for (id in chunk) try { Db.deleteCloud(chat, id) } catch (_: Exception) {}
+                done += chunk.size
+                onProgress?.invoke(done, total)
+            }
+        }
+        for (chat in byChat.keys) try { pushIndex(chat) } catch (_: Exception) {}
+        Db.bump()
+        done
     }
 
 }

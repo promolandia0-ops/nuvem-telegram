@@ -17,7 +17,7 @@ App Android (Kotlin + Jetpack Compose + TDLib) que usa a sua própria conta do T
 - Organização por álbum (Camera, WhatsApp, Pictures…): envia um álbum por vez, em grupos de até 10 na ordem de data (foto e vídeo juntos; documentos em grupos separados), e no fim marca “📁 Álbum …”. Originais das fotos sobem no grupo de documentos seguinte, sem resposta.
 - Grupo com tópicos (um tópico por álbum) e separação automática (prints, memes, documentos, vídeos longos, câmera)
 - Legenda curta só com hashtags (`#2026_11 #camera`); metadados ficam no celular e num índice invisível no destino. Botão “Limpar legendas antigas” edita as que já tinham o JSON.
-- Sem duplicadas (mesmo arquivo em pastas diferentes, pelo hash)
+- Sem duplicadas (mesmo arquivo em pastas diferentes, pelo hash). Em Ajustes/Backup: **Apagar duplicadas do Telegram** (fotos, vídeos e originais).
 - Backup instantâneo ao entrar mídia nova, upload em paralelo (até 3 tópicos) e retomável
 - Resumo no fim (`✅ 120 fotos, 15 vídeos, 2,3 GB`)
 - Liberar espaço automático (opcional, desligado por padrão, com confirmação)

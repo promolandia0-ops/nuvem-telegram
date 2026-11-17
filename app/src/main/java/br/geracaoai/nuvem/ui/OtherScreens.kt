@@ -115,6 +115,7 @@ fun BackupScreen() {
             }
         }
         item { FreeUpCard() }
+        item { DupCleanRow() }
         item { Text("Opções", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
         item { SwitchRow("Backup automático", "A cada hora, em segundo plano", auto) { auto = it; save() } }
         item { SwitchRow("Somente no Wi-Fi", "Não usa dados móveis", wifi) { wifi = it; save() } }
@@ -204,13 +205,14 @@ fun SettingsScreen(onLogout: () -> Unit) {
                     }
                 })
         }
+        item { DupCleanRow() }
         item { SecretSettingsRow() }
         item { ListItem(headlineContent = { Text("Reindexar nuvem") }, supportingContent = { Text(if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)") },
             leadingContent = { Icon(Icons.Rounded.Sync, null) }, modifier = Modifier.clickable(enabled = !syncing) { syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false } }) }
         item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro grupo, canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
             modifier = Modifier.clickable { Prefs.clearDest(); onLogout() }) }
         item { ListItem(headlineContent = { Text("Sair / trocar de conta") }, supportingContent = { Text("Entrar com outro número. Os arquivos continuam no Telegram.") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.4.0 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+        item { Text("Nuvem 1.4.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
     }
     if (emailDlg) AlertDialog({ emailDlg = false }, title = { Text("E-mail de login") },
         text = {
@@ -308,5 +310,61 @@ fun SecretAlbumsEntry(onOpen: (List<CloudItem>, Int) -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+fun DupCleanRow() {
+    val scope = rememberCoroutineScope()
+    var scanning by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var scanHint by remember { mutableStateOf<String?>(null) }
+    var plan by remember { mutableStateOf<DupPlan?>(null) }
+    var confirm by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+    var progress by remember { mutableStateOf("") }
+    ListItem(
+        headlineContent = { Text("Apagar duplicadas do Telegram") },
+        supportingContent = { Text(when {
+            deleting -> progress.ifBlank { "Apagando duplicadas…" }
+            scanning -> progress.ifBlank { "Procurando fotos, vídeos e arquivos repetidos…" }
+            result != null -> result!!
+            scanHint != null -> scanHint!!
+            else -> "Acha fotos, vídeos e originais repetidos e apaga, deixando a cópia mais antiga."
+        }) },
+        leadingContent = { Icon(Icons.Rounded.ContentCopy, null) },
+        modifier = Modifier.clickable(enabled = !scanning && !deleting) {
+            scanning = true; result = null; plan = null; progress = "Lendo o Telegram…"
+            scope.launch {
+                try {
+                    val p = withContext(Dispatchers.IO) { Repo.scanDuplicates { n -> progress = "Lendo… $n itens" } }
+                    plan = p
+                    scanHint = p.preview
+                    if (p.delete.isNotEmpty()) confirm = true
+                } catch (e: Exception) { result = traduz(e.message) }
+                scanning = false; progress = ""
+            }
+        })
+    if (confirm && plan != null) {
+        val p = plan!!
+        AlertDialog(
+            { confirm = false },
+            title = { Text("Apagar duplicadas?") },
+            text = { Text("${p.preview}. Fica só a cópia mais antiga de cada um, e o arquivo original da foto se existir. Isso apaga as outras mensagens no Telegram.") },
+            confirmButton = {
+                Button({
+                    confirm = false; deleting = true; progress = "Apagando…"
+                    scope.launch {
+                        try {
+                            val n = withContext(Dispatchers.IO) { Repo.deleteDuplicates(p) { d, t -> progress = "Apagando $d de $t" } }
+                            result = "Apagadas $n duplicadas."
+                            plan = null; scanHint = null
+                        } catch (e: Exception) { result = traduz(e.message) }
+                        deleting = false; progress = ""
+                    }
+                }) { Text("Apagar") }
+            },
+            dismissButton = { TextButton({ confirm = false }) { Text("Cancelar") } }
+        )
     }
 }

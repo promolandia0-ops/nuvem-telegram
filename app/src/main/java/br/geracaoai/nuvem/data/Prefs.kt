@@ -46,9 +46,12 @@ object Prefs {
         j.put("$chat", id)
         p.edit().putString("index_map", j.toString()).apply()
     }
+    var knownChats: Set<String> get() = p.getStringSet("known_chats", emptySet())!!; set(v) = p.edit().putStringSet("known_chats", v).apply()
+    fun rememberChat(id: Long) { if (id != 0L) knownChats = knownChats + id.toString() }
     fun destChats(): List<Long> = listOf(chatId, legacyChatId, secretChatId).filter { it != 0L }.distinct()
-    fun clearDest() { chatId = 0; chatTitle = ""; indexMsgId = 0; legacyChatId = 0; topicMap = "" }
-    fun clearAccount() { clearDest(); secretChatId = 0; secretFolders = emptySet() }
+    fun allKnownChats(): List<Long> = (destChats() + knownChats.mapNotNull { it.toLongOrNull() }).filter { it != 0L }.distinct()
+    fun clearDest() { if (chatId != 0L) rememberChat(chatId); chatId = 0; chatTitle = ""; indexMsgId = 0; topicMap = "" }
+    fun clearAccount() { clearDest(); secretChatId = 0; secretFolders = emptySet(); knownChats = emptySet(); legacyChatId = 0 }
     fun setTheme(v: Int) { p.edit().putInt("theme", v).apply(); theme.value = v }
 }
 

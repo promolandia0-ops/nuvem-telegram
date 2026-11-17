@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 data class CloudItem(
     val msgId: Long, val chatId: Long, val name: String, val mime: String, val size: Long,
     val taken: Long, val folder: String, val path: String, val hash: String, val mini: ByteArray?,
+    val uniqueId: String = "",
 ) { val isVideo get() = mime.startsWith("video/") }
 
 const val WATCHED_FOLDER = "Assistidos no Telegram"
@@ -20,15 +21,16 @@ object Db {
     val version = MutableStateFlow(0)
 
     fun init(c: Context) {
-        h = object : SQLiteOpenHelper(c, "nuvem.db", null, 2) {
+        h = object : SQLiteOpenHelper(c, "nuvem.db", null, 3) {
             override fun onCreate(db: SQLiteDatabase) {
-                db.execSQL("CREATE TABLE cloud(msg_id INTEGER, chat_id INTEGER, name TEXT, mime TEXT, size INTEGER, taken INTEGER, folder TEXT, path TEXT, hash TEXT, mini BLOB, PRIMARY KEY(chat_id,msg_id))")
+                db.execSQL("CREATE TABLE cloud(msg_id INTEGER, chat_id INTEGER, name TEXT, mime TEXT, size INTEGER, taken INTEGER, folder TEXT, path TEXT, hash TEXT, mini BLOB, uniq TEXT, PRIMARY KEY(chat_id,msg_id))")
                 db.execSQL("CREATE INDEX cloud_hash ON cloud(hash)")
                 db.execSQL("CREATE TABLE local_ok(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, hash TEXT)")
-                onUpgrade(db, 1, 2)
+                onUpgrade(db, 1, 3)
             }
             override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
                 if (o < 2) db.execSQL("CREATE TABLE IF NOT EXISTS watched_seen(k TEXT PRIMARY KEY, at INTEGER)")
+                if (o < 3) try { db.execSQL("ALTER TABLE cloud ADD COLUMN uniq TEXT") } catch (_: Exception) {}
             }
         }
     }
@@ -37,7 +39,7 @@ object Db {
     fun putCloud(i: CloudItem) {
         db.insertWithOnConflict("cloud", null, ContentValues().apply {
             put("msg_id", i.msgId); put("chat_id", i.chatId); put("name", i.name); put("mime", i.mime); put("size", i.size)
-            put("taken", i.taken); put("folder", i.folder); put("path", i.path); put("hash", i.hash); put("mini", i.mini)
+            put("taken", i.taken); put("folder", i.folder); put("path", i.path); put("hash", i.hash); put("mini", i.mini); put("uniq", i.uniqueId)
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
     fun bump() { version.value++ }
@@ -48,6 +50,10 @@ object Db {
     /** Todos os itens do canal, inclusive originais e assistidos (para o índice). */
     fun allForIndex(chatId: Long): List<CloudItem> = query("chat_id=?", arrayOf("$chatId"))
 
+    fun anyByNameSize(name: String, size: Long): CloudItem? {
+        if (name.isBlank() || name == "item" || size <= 0) return null
+        return query("name=? AND size=?", arrayOf(name, "$size")).firstOrNull()
+    }
     fun anyByHash(hash: String, size: Long? = null): CloudItem? {
         if (hash.isBlank()) return null
         return if (size != null && size > 0) query("hash=? AND size=?", arrayOf(hash, "$size")).firstOrNull()
@@ -69,7 +75,8 @@ object Db {
     private fun query(where: String, args: Array<String>): List<CloudItem> =
         db.query("cloud", null, where, args, null, null, "taken DESC, msg_id DESC").use { c ->
             buildList { while (c.moveToNext()) add(CloudItem(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getLong(4),
-                c.getLong(5), c.getString(6), c.getString(7), c.getString(8), c.getBlob(9))) }
+                c.getLong(5), c.getString(6), c.getString(7), c.getString(8), c.getBlob(9),
+                if (c.columnCount > 10) c.getString(10) ?: "" else "")) }
         }
 
     /** Cache de hash de arquivos locais (path+tamanho+mtime) para não recalcular. */
