@@ -11,7 +11,10 @@ import android.util.Size
 import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.tg.TdException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.drinkless.tdlib.TdApi
 import java.io.File
@@ -24,6 +27,8 @@ data class RemoteFile(val file: TdApi.File, val name: String, val mime: String, 
 
 object Repo {
     const val CHANNEL_TITLE = "Nuvem"
+    private val reconcileLock = Mutex()
+    @Volatile private var lastReconcileAt = 0L
 
     fun docOf(m: TdApi.Message): TdApi.Document? = (m.content as? TdApi.MessageDocument)?.document
 
@@ -278,8 +283,14 @@ object Repo {
     // ---------- Upload ----------
     fun localHash(i: LocalItem): String {
         Db.cachedHash(i.path, i.size, i.mtime)?.let { return it }
-        val h = Hash.sha256(File(i.path).inputStream())
-        Db.cacheHash(i.path, i.size, i.mtime, h); return h
+        if (i.mediaId > 0) Db.cachedHash("mid:${i.mediaId}", i.size, i.mtime)?.let { h ->
+            Db.cacheHash(i.path, i.size, i.mtime, h)
+            return h
+        }
+        val h = Hash.quick(File(i.path))
+        Db.cacheHash(i.path, i.size, i.mtime, h)
+        if (i.mediaId > 0) Db.cacheHash("mid:${i.mediaId}", i.size, i.mtime, h)
+        return h
     }
 
     fun thumbFor(c: Context, i: LocalItem): File? {
@@ -668,24 +679,95 @@ object Repo {
         return Freeable(items, items.sumOf { it.size })
     }
 
-    /** Verificação rigorosa antes de apagar: recalcula hash do arquivo e confere a mensagem no Telegram. */
+    /** Verificação rigorosa antes de apagar: confere na hora se a mensagem ainda existe no Telegram. */
     suspend fun verifyForDelete(items: List<LocalItem>, onProgress: (Int) -> Unit): List<LocalItem> = withContext(Dispatchers.IO) {
         items.filterIndexed { idx, i ->
             onProgress(idx)
             try {
                 val f = File(i.path); if (!f.exists() || f.length() != i.size) return@filterIndexed false
-                val h = Hash.sha256(f.inputStream())
-                val ci = Db.anyByHash(h, i.size) ?: return@filterIndexed false
-                val m = Td.send(TdApi.GetMessage(ci.chatId, ci.msgId), 20_000)
+                val h = Db.cachedHash(i.path, i.size, i.mtime) ?: Hash.quick(f)
+                val ci = Db.anyByHash(h, i.size) ?: Db.anyByHash(h) ?: Db.anyByNameSize(i.name, i.size) ?: return@filterIndexed false
+                val m = try {
+                    Td.send(TdApi.GetMessage(ci.chatId, ci.msgId), 20_000)
+                } catch (e: TdException) {
+                    if (CloudSync.isMessageGone(e.code, e.message) || CloudSync.isChatGone(e.code, e.message)) {
+                        Db.deleteCloud(ci.chatId, ci.msgId)
+                        val orig = if (ci.hash.isNotBlank()) Db.originalByHash(ci.chatId, ci.hash) else null
+                        if (orig != null) Db.deleteCloud(orig.chatId, orig.msgId)
+                    }
+                    return@filterIndexed false
+                }
                 val r = remoteOf(m) ?: return@filterIndexed false
                 val meta = Meta.parse(captionOf(m))
                 val match = when {
-                    meta != null -> meta.hash == h && meta.size == i.size
-                    ci.hash == h && ci.size == i.size -> true
+                    meta != null -> (meta.hash == h || meta.hash.isBlank()) && (meta.size == i.size || meta.size == 0L)
+                    ci.size == i.size -> true
                     else -> false
                 }
-                match && r.file.remote.isUploadingCompleted && r.file.remote.id.isNotEmpty()
+                match && r.file.remote.isUploadingCompleted && (r.file.remote.id.isNotEmpty() || r.file.remote.uniqueId.isNotEmpty())
             } catch (_: Exception) { false }
+        }
+    }
+
+    /**
+     * Confere no Telegram quais mensagens do índice ainda existem.
+     * O que foi apagado (ou histórico limpo) sai do banco local: some da galeria,
+     * o "Liberar espaço" não conta, e o próximo backup reenvia se ainda estiver no celular.
+     */
+    suspend fun reconcileCloud(force: Boolean = false, onProgress: ((Int, Int) -> Unit)? = null): Int = withContext(Dispatchers.IO) {
+        reconcileLock.withLock {
+            if (!force && lastReconcileAt != 0L && System.currentTimeMillis() - lastReconcileAt < 8_000L) return@withLock 0
+            if (Prefs.allKnownChats().isEmpty()) { lastReconcileAt = System.currentTimeMillis(); return@withLock 0 }
+            var removed = 0
+            for (chat in Prefs.allKnownChats()) {
+                val stored = Db.idsForChat(chat)
+                if (stored.isEmpty()) continue
+                val found = HashSet<Long>()
+                var goneChat = false
+                for (chunk in stored.chunked(100)) {
+                    var tries = 0
+                    while (tries < 5) {
+                        try {
+                            val r = Td.send(TdApi.GetMessages(chat, chunk.toLongArray()), 20_000)
+                            found += CloudSync.foundIds((r.messages ?: emptyArray()).map { it?.id })
+                            onProgress?.invoke(found.size + removed, stored.size)
+                            break
+                        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (e: TdException) {
+                            if (CloudSync.isChatGone(e.code, e.message)) { goneChat = true; break }
+                            val sec = floodWaitSeconds(e.message) ?: if (e.code == 429) 5 else null
+                            if (sec != null) { delay((sec + 1) * 1000L); tries++ }
+                            else {
+                                // fallback: um a um neste lote
+                                for (id in chunk) {
+                                    try {
+                                        val m = Td.send(TdApi.GetMessage(chat, id), 12_000)
+                                        if (m.id != 0L) found += m.id
+                                    } catch (e2: TdException) {
+                                        if (CloudSync.isChatGone(e2.code, e2.message)) { goneChat = true; break }
+                                        // missing: simply not added to found
+                                    } catch (_: Exception) {}
+                                }
+                                break
+                            }
+                        }
+                    }
+                    if (goneChat) break
+                }
+                if (goneChat) {
+                    removed += stored.size
+                    Db.clearCloud(chat)
+                } else {
+                    val missing = CloudSync.missingIds(stored, found)
+                    if (missing.isNotEmpty()) {
+                        Db.forgetMessages(chat, missing)
+                        removed += missing.size
+                    }
+                }
+            }
+            lastReconcileAt = System.currentTimeMillis()
+            if (removed > 0) Db.bump()
+            removed
         }
     }
 

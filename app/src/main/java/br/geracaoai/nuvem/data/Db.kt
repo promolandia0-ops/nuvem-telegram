@@ -44,6 +44,19 @@ object Db {
     }
     fun bump() { version.value++ }
     fun deleteCloud(chatId: Long, msgId: Long) { db.delete("cloud", "chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")); bump() }
+    fun forgetMessages(chatId: Long, ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        db.beginTransaction()
+        try {
+            for (id in ids) db.delete("cloud", "chat_id=? AND msg_id=?", arrayOf("$chatId", "$id"))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        bump()
+    }
+    fun idsForChat(chatId: Long): List<Long> =
+        db.rawQuery("SELECT msg_id FROM cloud WHERE chat_id=?", arrayOf("$chatId")).use { c ->
+            buildList { while (c.moveToNext()) add(c.getLong(0)) }
+        }
     fun clearCloud(chatId: Long) { db.delete("cloud", "chat_id=?", arrayOf("$chatId")); bump() }
     fun hasMsg(chatId: Long, msgId: Long) = db.rawQuery("SELECT 1 FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { it.moveToFirst() }
     fun getCloud(chatId: Long, msgId: Long): CloudItem? = query("chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).firstOrNull()

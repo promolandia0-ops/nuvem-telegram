@@ -54,6 +54,11 @@ object Td {
             is TdApi.UpdateMessageSendSucceeded -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(o.message, null))
             is TdApi.UpdateMessageSendFailed -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(null, o.error))
             is TdApi.UpdateOption -> if (o.name == "is_premium") isPremium.value = (o.value as? TdApi.OptionValueBoolean)?.value == true
+            is TdApi.UpdateDeleteMessages -> {
+                if (!o.fromCache && o.messageIds != null && o.messageIds.isNotEmpty()) {
+                    try { br.geracaoai.nuvem.data.Db.forgetMessages(o.chatId, o.messageIds.toList()) } catch (_: Exception) {}
+                }
+            }
             else -> {}
         }
     }
@@ -72,7 +77,7 @@ object Td {
             useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
             apiId = id; apiHash = hash
             systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.4.1"
+            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.4.2"
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }

@@ -125,10 +125,6 @@ fun BackupScreen() {
             var instant by remember { mutableStateOf(Prefs.instantBackup) }
             SwitchRow("Backup instantâneo", "Sobe sozinho quando entra foto ou vídeo novo na galeria", instant) { instant = it; Prefs.instantBackup = it }
         }
-        item {
-            var smart by remember { mutableStateOf(Prefs.smartSort) }
-            SwitchRow("Separação automática", "Prints, memes, documentos e vídeos longos vão cada um pro seu tópico", smart) { smart = it; Prefs.smartSort = it }
-        }
         item { AutoFreeRow() }
         item { Text("Pastas para backup", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
         item { Text("Toque no cadeado pra mandar a pasta ao canal secreto (protegido por PIN ou digital).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -212,7 +208,7 @@ fun SettingsScreen(onLogout: () -> Unit) {
         item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro grupo, canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
             modifier = Modifier.clickable { Prefs.clearDest(); onLogout() }) }
         item { ListItem(headlineContent = { Text("Sair / trocar de conta") }, supportingContent = { Text("Entrar com outro número. Os arquivos continuam no Telegram.") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.4.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+        item { Text("Nuvem 1.4.2 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
     }
     if (emailDlg) AlertDialog({ emailDlg = false }, title = { Text("E-mail de login") },
         text = {

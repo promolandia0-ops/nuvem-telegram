@@ -14,11 +14,11 @@ App Android (Kotlin + Jetpack Compose + TDLib) que usa a sua própria conta do T
 - Backup automático (Wi-Fi/carregando), em segundo plano com WorkManager, com retomada
 - Envio como foto e vídeo no Telegram (aparece e toca direto no app). Vídeos sobem no arquivo original, sem recompressão no celular. Se o Telegram recusar (tipo não suportado ou arquivo > 2 GB), cai para documento.
 - Fotos em qualidade original (ligado por padrão): além da foto pra ver, envia o arquivo original como documento (a restauração usa o original). O Telegram comprime a foto de visualização (~2560 px).
-- Organização por álbum (Camera, WhatsApp, Pictures…): envia um álbum por vez, em grupos de até 10 na ordem de data (foto e vídeo juntos; documentos em grupos separados), e no fim marca “📁 Álbum …”. Originais das fotos sobem no grupo de documentos seguinte, sem resposta.
-- Grupo com tópicos (um tópico por álbum) e separação automática (prints, memes, documentos, vídeos longos, câmera)
+- Organização **só pelas pastas da galeria do celular** (Camera, Telegram, WhatsApp Video, Screenshots, Screen recordings…). Sem categorias como “vídeos longos”, prints ou memes. Uma pasta inteira de cada vez, em grupos de até 10 na ordem de data; no fim marca “📁 Álbum …”. Começa a enviar a pasta assim que o primeiro grupo de 10 está pronto, e já lê a próxima por trás.
+- Grupo com tópicos (um tópico por pasta do celular). Hashtag curta só com mês e nome da pasta (`#2026_11 #camera`).
 - Legenda curta só com hashtags (`#2026_11 #camera`); metadados ficam no celular e num índice invisível no destino. Botão “Limpar legendas antigas” edita as que já tinham o JSON.
 - Sem duplicadas (mesmo arquivo em pastas diferentes, pelo hash). Em Ajustes/Backup: **Apagar duplicadas do Telegram** (fotos, vídeos e originais).
-- Backup instantâneo ao entrar mídia nova, upload em paralelo (até 3 tópicos) e retomável
+- Backup instantâneo ao entrar mídia nova, envio pasta por pasta (sem misturar) e retomável. Hash rápido (1 MB no começo e no fim) com cache por arquivo.
 - Resumo no fim (`✅ 120 fotos, 15 vídeos, 2,3 GB`)
 - Liberar espaço automático (opcional, desligado por padrão, com confirmação)
 - Restaurar um álbum inteiro nas pastas originais
@@ -26,5 +26,5 @@ App Android (Kotlin + Jetpack Compose + TDLib) que usa a sua própria conta do T
 - Até 2 GB por arquivo (4 GB com Premium)
 - Linha do tempo por data, álbuns por pasta, busca, visualizador com zoom e streaming de vídeo
 - Restaurar para o celular, apagar da nuvem (com confirmação)
-- "Liberar armazenamento": apaga do celular só o que foi verificado (hash + tamanho + mensagem existente no Telegram), com confirmação do sistema
+- Ao abrir o app e antes de mostrar “Liberar armazenamento”, confere no Telegram o que ainda existe. Se você apagou ou limpou o histórico, some da galeria e do card de liberar espaço, e o próximo backup reenvia o que ainda estiver no celular. Antes de apagar do aparelho, confere de novo cada mensagem.
 - Sessão do Telegram salva no aparelho (não precisa redigitar o número ao reabrir). É possível cadastrar um e-mail de login; não existe entrada com conta Google.

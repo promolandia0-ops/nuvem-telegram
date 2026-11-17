@@ -49,6 +49,7 @@ fun GalleryScreen(folder: String?, onOpen: (List<CloudItem>, Int) -> Unit) {
     val ver by Db.version.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var all by remember { mutableStateOf<List<CloudItem>>(emptyList()) }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { try { Repo.reconcileCloud() } catch (_: Exception) {} } }
     LaunchedEffect(ver, folder) { all = withContext(Dispatchers.IO) { Db.allCloudMany(Prefs.galleryChats()).filter { folder == null || it.folder == folder } } }
     val items = remember(all, query) {
         if (query.isBlank()) all else { val q = query.lowercase(); all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() } }
@@ -138,7 +139,16 @@ fun FreeUpCard() {
     val running = work.any { it.state == WorkInfo.State.RUNNING }
     var free by remember { mutableStateOf<Freeable?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(ver, running, refresh) { if (!running) free = withContext(Dispatchers.IO) { try { Repo.freeableQuick(ctx) } catch (_: Exception) { null } } }
+    var checking by remember { mutableStateOf(true) }
+    LaunchedEffect(ver, running, refresh) {
+        if (running) return@LaunchedEffect
+        checking = true
+        free = withContext(Dispatchers.IO) {
+            try { Repo.reconcileCloud() } catch (_: Exception) {}
+            try { Repo.freeableQuick(ctx) } catch (_: Exception) { null }
+        }
+        checking = false
+    }
     var phase by remember { mutableStateOf<String?>(null) }  // null, "verify", "confirm"
     var progress by remember { mutableIntStateOf(0) }
     var verified by remember { mutableStateOf<List<LocalItem>>(emptyList()) }
@@ -148,7 +158,7 @@ fun FreeUpCard() {
         refresh++
     }
     val f = free
-    AnimatedVisibility(f != null && f.items.isNotEmpty() && !running, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+    AnimatedVisibility(f != null && f.items.isNotEmpty() && !running && !checking, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         if (f != null) ElevatedCard(Modifier.fillMaxWidth().padding(8.dp)) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primaryContainer) {
