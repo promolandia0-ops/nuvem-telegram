@@ -10,6 +10,7 @@ data class LocalItem(val uri: Uri, val path: String, val name: String, val size:
                      val mediaId: Long = 0)
 
 data class Bucket(val name: String, val count: Int)
+data class BucketStat(val name: String, val count: Int, val bytes: Long)
 
 object LocalMedia {
     private val coll = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
@@ -42,6 +43,22 @@ object LocalMedia {
 
     fun buckets(c: Context): List<Bucket> =
         countByBucket(c).map { Bucket(it.key, it.value) }.sortedByDescending { it.count }
+
+    /** Contagem e tamanho por pasta (só pra UI de progresso). */
+    fun statsByBucket(c: Context, buckets: Set<String>? = null): Map<String, BucketStat> {
+        val proj = arrayOf(MediaStore.Files.FileColumns.BUCKET_DISPLAY_NAME, MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.MEDIA_TYPE)
+        val count = HashMap<String, Int>()
+        val bytes = HashMap<String, Long>()
+        c.contentResolver.query(coll, proj, mediaSel, null, null)?.use { k ->
+            while (k.moveToNext()) {
+                val b = k.getString(0) ?: ""
+                if (buckets != null && b !in buckets) continue
+                count[b] = (count[b] ?: 0) + 1
+                bytes[b] = (bytes[b] ?: 0L) + k.getLong(1).coerceAtLeast(0L)
+            }
+        }
+        return count.mapValues { (n, c) -> BucketStat(n, c, bytes[n] ?: 0L) }
+    }
 
     private fun query(c: Context, buckets: Set<String>?, exact: String?): List<LocalItem> {
         val (sel, args) = if (exact != null) {

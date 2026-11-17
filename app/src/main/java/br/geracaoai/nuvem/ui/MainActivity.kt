@@ -20,7 +20,9 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import br.geracaoai.nuvem.data.CloudItem
 import br.geracaoai.nuvem.data.Prefs
 import br.geracaoai.nuvem.data.Repo
@@ -32,7 +34,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { NuvemTheme { Surface { Root() } } }
+        setContent { NuvemTheme { Root() } }
     }
 
     fun aplicarOrientacao(codigo: Int) { requestedOrientation = codigo }
@@ -84,6 +86,8 @@ fun Root() {
 @Composable
 fun MainShell(onLogout: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var galleryFolder by rememberSaveable { mutableStateOf<String?>(null) }
+    var videosOnly by rememberSaveable { mutableStateOf(false) }
     var viewer by remember { mutableStateOf<Pair<List<CloudItem>, Int>?>(null) }
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     LaunchedEffect(Unit) {
@@ -92,27 +96,28 @@ fun MainShell(onLogout: () -> Unit) {
         try { Repo.ensureDestination(); Repo.reconcileCloud(); Repo.syncIndex() } catch (_: Exception) {}
     }
     BackHandler(viewer != null) { viewer = null }
-    Box {
-        Scaffold(bottomBar = {
-            NavigationBar {
-                listOf(Triple("Fotos", Icons.Rounded.Photo, 0), Triple("Álbuns", Icons.Rounded.PhotoLibrary, 1), Triple("Assistidos", Icons.Rounded.OndemandVideo, 4),
-                    Triple("Backup", Icons.Rounded.CloudUpload, 2), Triple("Ajustes", Icons.Rounded.Settings, 3)).forEach { (l, i, n) ->
-                    NavigationBarItem(tab == n, { tab = n }, { Icon(i, null) }, label = { Text(l) })
-                }
-            }
-        }) { pad ->
-            AnimatedContent(tab, Modifier.padding(pad), transitionSpec = { fadeIn() + scaleIn(initialScale = 0.98f) togetherWith fadeOut() }, label = "tab") { t ->
+    BackHandler(viewer == null && tab == 1 && (galleryFolder != null || videosOnly)) { galleryFolder = null; videosOnly = false }
+    AuroraBackdrop {
+        Box(Modifier.fillMaxSize().statusBarsPadding()) {
+            AnimatedContent(tab, Modifier.fillMaxSize(), transitionSpec = {
+                val dir = if (targetState > initialState) 1 else -1
+                (slideInHorizontally { it / 8 * dir } + fadeIn()) togetherWith (slideOutHorizontally { -it / 8 * dir } + fadeOut())
+            }, label = "tab") { t ->
                 when (t) {
-                    0 -> GalleryScreen(null) { l, i -> viewer = l to i }
-                    1 -> AlbumsScreen { l, i -> viewer = l to i }
-                    2 -> BackupScreen()
-                    4 -> WatchedScreen()
+                    0 -> BackupScreen(
+                        onFotos = { f, v -> galleryFolder = f; videosOnly = v; tab = 1 },
+                        onSettings = { tab = 3 },
+                        onAssistidos = { tab = 2 },
+                    )
+                    1 -> GalleryScreen(galleryFolder, videosOnly, onBack = { galleryFolder = null; videosOnly = false }) { l, i -> viewer = l to i }
+                    2 -> WatchedScreen()
                     else -> SettingsScreen(onLogout)
                 }
             }
-        }
-        AnimatedVisibility(viewer != null, enter = fadeIn() + scaleIn(initialScale = 0.92f), exit = fadeOut() + scaleOut(targetScale = 0.92f)) {
-            viewer?.let { (l, i) -> ViewerScreen(l, i) { viewer = null } }
+            NvNavBar(tab, { n -> tab = n; if (n != 1) { galleryFolder = null; videosOnly = false } }, Modifier.align(Alignment.BottomCenter))
+            AnimatedVisibility(viewer != null, enter = fadeIn() + scaleIn(initialScale = 0.92f), exit = fadeOut() + scaleOut(targetScale = 0.92f)) {
+                viewer?.let { (l, i) -> ViewerScreen(l, i) { viewer = null } }
+            }
         }
     }
 }

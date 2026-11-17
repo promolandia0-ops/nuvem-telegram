@@ -49,108 +49,18 @@ fun AlbumsScreen(onOpen: (List<CloudItem>, Int) -> Unit) {
     AnimatedContent(open, transitionSpec = { (slideInHorizontally { it / 4 } + fadeIn()) togetherWith fadeOut() }, label = "alb") { o ->
         if (o == null) LazyVerticalGrid(GridCells.Adaptive(160.dp), contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item(span = { GridItemSpan(maxLineSpan) }) { Text("Álbuns por pasta", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(4.dp)) }
+            item(span = { GridItemSpan(maxLineSpan) }) { Text("Álbuns", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp)) }
             item(span = { GridItemSpan(maxLineSpan) }) { SecretAlbumsEntry(onOpen) }
             items(albums, key = { it.first }) { (name, list) ->
-                Column(Modifier.clickable { open = name }) {
-                    Thumb(list.first(), Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(16.dp)))
-                    Text(name.ifBlank { "Sem pasta" }, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
-                    Text("${list.size} itens", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                GlassCard(onClick = { open = name }, radius = 20.dp, padding = 8.dp) {
+                    Thumb(list.first(), Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)))
+                    Text(folderLabel(name), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp))
+                    Text("${list.size} itens", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
                 }
             }
         } else Column {
             Row(verticalAlignment = Alignment.CenterVertically) { IconButton({ open = null }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null) }; Text(o, style = MaterialTheme.typography.titleLarge) }
-            GalleryScreen(o, onOpen)
-        }
-    }
-}
-
-@Composable
-fun BackupScreen() {
-    val ctx = LocalContext.current
-    val wm = WorkManager.getInstance(ctx)
-    val now by wm.getWorkInfosForUniqueWorkFlow(Backup.NOW).collectAsStateWithLifecycle(emptyList())
-    val per by wm.getWorkInfosForUniqueWorkFlow(Backup.PERIODIC).collectAsStateWithLifecycle(emptyList())
-    val cont by wm.getWorkInfosForUniqueWorkFlow(Backup.CONTINUE).collectAsStateWithLifecycle(emptyList())
-    var paused by remember { mutableStateOf(Prefs2.backupPaused) }
-    // Ao pausar, a UI para na hora (não espera o WorkManager confirmar o cancelamento).
-    val running = if (paused) null else (now + per + cont).firstOrNull { it.state == WorkInfo.State.RUNNING }
-    var buckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
-    var sel by remember { mutableStateOf(Prefs.folders) }
-    var auto by remember { mutableStateOf(Prefs.autoBackup) }
-    var wifi by remember { mutableStateOf(Prefs.wifiOnly) }
-    var charging by remember { mutableStateOf(Prefs.chargingOnly) }
-    var origPhotos by remember { mutableStateOf(Prefs.originalPhotos) }
-    LaunchedEffect(Unit) { buckets = withContext(Dispatchers.IO) { try { LocalMedia.buckets(ctx) } catch (_: Exception) { emptyList() } } }
-    fun save() { Prefs.folders = sel; Prefs.autoBackup = auto; Prefs.wifiOnly = wifi; Prefs.chargingOnly = charging; Prefs.originalPhotos = origPhotos; Backup.schedule(ctx) }
-    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (running != null) Icons.Rounded.CloudSync else Icons.Rounded.CloudDone, null, tint = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.width(12.dp))
-                        Text(if (running != null) "Fazendo backup…" else if (paused) "Backup pausado" else "Backup", style = MaterialTheme.typography.titleLarge)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    AnimatedContent(running, label = "prog") { r ->
-                        if (r != null) {
-                            val d = r.progress.getInt("done", 0); val t = r.progress.getInt("total", 0); val p = r.progress.getInt("pct", 0)
-                            val step = r.progress.getString("name") ?: "verificando…"
-                            val err = r.progress.getString("err")?.takeIf { it.isNotBlank() && !isCancelMessage(it) }
-                            Column {
-                                Text(if (t == 0) step else "$d de $t • $step", maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Spacer(Modifier.height(6.dp)); LinearProgressIndicator({ if (t == 0) 0f else d / t.toFloat() }, Modifier.fillMaxWidth())
-                                Spacer(Modifier.height(4.dp)); LinearProgressIndicator({ p / 100f }, Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.tertiary)
-                                err?.let { Spacer(Modifier.height(8.dp)); Text("Erro: ${traduz(it)}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                            }
-                        } else Text(buildString {
-                            if (paused) append("Parado por você. Nada será enviado até tocar em Retomar.\n")
-                            append(if (Prefs.lastBackup > 0) "Último backup: " + SimpleDateFormat("dd/MM HH:mm", Locale("pt", "BR")).format(Date(Prefs.lastBackup)) else "Nenhum backup ainda")
-                            if (Prefs.lastError.isNotBlank() && !isCancelMessage(Prefs.lastError)) append("\nÚltimo erro: ${traduz(Prefs.lastError)}")
-                        }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (paused) Button({ paused = false; save(); Backup.resume(ctx) }, enabled = sel.isNotEmpty()) { Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Retomar") }
-                        else Button({ save(); Backup.runNow(ctx, true) }, enabled = running == null && sel.isNotEmpty()) { Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(6.dp)); Text("Fazer backup agora") }
-                        if (running != null) OutlinedButton({ paused = true; Backup.stop(ctx) }) { Icon(Icons.Rounded.Stop, null); Spacer(Modifier.width(6.dp)); Text("Parar") }
-                    }
-                }
-            }
-        }
-        item { SamsungBatteryCard() }
-        item { FreeUpCard() }
-        item { DupCleanRow() }
-        item { Text("Opções", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
-        item { SwitchRow("Backup automático", "A cada hora, em segundo plano", auto) { auto = it; save() } }
-        item { SwitchRow("Somente no Wi-Fi", "Não usa dados móveis", wifi) { wifi = it; save() } }
-        item { SwitchRow("Somente carregando", "Economiza bateria", charging) { charging = it; save() } }
-        item { SwitchRow("Fotos em qualidade original", "Envia a foto pra ver no Telegram e também o arquivo original, sem compressão", origPhotos) { origPhotos = it; save() } }
-        item {
-            var instant by remember { mutableStateOf(Prefs.instantBackup) }
-            SwitchRow("Backup instantâneo", "Sobe sozinho quando entra foto ou vídeo novo na galeria", instant) { instant = it; Prefs.instantBackup = it }
-        }
-        item { AutoFreeRow() }
-        item { Text("Pastas para backup", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
-        item { Text("Toque no cadeado pra mandar a pasta ao canal secreto (protegido por PIN ou digital).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        if (buckets.isEmpty()) item { Text("Permita o acesso a fotos e vídeos para listar as pastas.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        items(buckets, key = { it.name }) { b ->
-            var secretSet by remember { mutableStateOf(Prefs.secretFolders) }
-            val locked = b.name in secretSet
-            ListItem(headlineContent = { Text(b.name.ifBlank { "(sem nome)" }) }, supportingContent = { Text("${b.count} itens" + if (locked) " • secreto" else "") },
-                leadingContent = { Icon(if (b.name.equals("Camera", true)) Icons.Rounded.PhotoCamera else Icons.Rounded.Folder, null) },
-                trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton({
-                            val next = if (locked) secretSet - b.name else secretSet + b.name
-                            secretSet = next; Prefs.secretFolders = next
-                            if (!locked && b.name !in sel) { sel = sel + b.name; save() }
-                        }) { Icon(if (locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen, if (locked) "Secreto" else "Normal") }
-                        Checkbox(b.name in sel || locked, { c -> sel = if (c) sel + b.name else sel - b.name; save() })
-                    }
-                },
-                modifier = Modifier.clickable { sel = if (b.name in sel) sel - b.name else sel + b.name; save() })
+            GalleryScreen(o, onOpen = onOpen)
         }
     }
 }
@@ -158,6 +68,19 @@ fun BackupScreen() {
 @Composable
 fun SwitchRow(title: String, sub: String, v: Boolean, on: (Boolean) -> Unit) =
     ListItem(headlineContent = { Text(title) }, supportingContent = { Text(sub) }, trailingContent = { Switch(v, on) }, modifier = Modifier.clickable { on(!v) })
+
+
+@Composable
+fun SettingsLine(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, enabled: Boolean = true, onClick: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier).padding(horizontal = 10.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(22.dp), tint = Nv.Sky)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
 
 @Composable
 fun SettingsScreen(onLogout: () -> Unit) {
@@ -179,24 +102,34 @@ fun SettingsScreen(onLogout: () -> Unit) {
             emailPattern = st.loginEmailAddressPattern.takeIf { it.isNotBlank() }
         } catch (_: Exception) {}
     }
-    LazyColumn(contentPadding = PaddingValues(16.dp)) {
-        item { Text("Ajustes", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 8.dp)) }
-        item { ListItem(headlineContent = { Text("Destino") }, supportingContent = { Text(Prefs.chatTitle.ifBlank { "—" } + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo") }, leadingContent = { Icon(Icons.Rounded.Cloud, null) }) }
+    LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 108.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item { Text("Ajustes", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold) }
         item {
-            ListItem(headlineContent = { Text("Tema") }, leadingContent = { Icon(Icons.Rounded.Palette, null) }, supportingContent = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Sistema", "Claro", "Escuro").forEachIndexed { i, l -> FilterChip(theme == i, { Prefs.setTheme(i) }, { Text(l) }) } }
-            })
+            SectionTitle("Conta")
+            GlassCard(padding = 8.dp) {
+                SettingsLine(Icons.Rounded.Cloud, "Destino", Prefs.chatTitle.ifBlank { "—" } + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo")
+                SettingsLine(Icons.Rounded.Email, "E-mail de login", if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.", onClick = { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" })
+                SettingsLine(Icons.Rounded.PhoneAndroid, "Sessão neste celular", "Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.")
+            }
         }
-        item { ListItem(headlineContent = { Text("E-mail de login") },
-            supportingContent = { Text(if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.") },
-            leadingContent = { Icon(Icons.Rounded.Email, null) }, modifier = Modifier.clickable { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" }) }
-        item { ListItem(headlineContent = { Text("Sessão neste celular") }, supportingContent = { Text("Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.") }, leadingContent = { Icon(Icons.Rounded.PhoneAndroid, null) }) }
         item {
-            var cleaning by remember { mutableStateOf(false) }
-            var cleanMsg by remember { mutableStateOf<String?>(null) }
-            ListItem(headlineContent = { Text("Limpar legendas antigas") }, supportingContent = { Text(cleanMsg ?: if (cleaning) "Editando mensagens…" else "Tira o texto enorme das que já subiram e deixa só a hashtag curta") },
-                leadingContent = { Icon(Icons.Rounded.CleaningServices, null) },
-                modifier = Modifier.clickable(enabled = !cleaning) {
+            SectionTitle("Aparência")
+            GlassCard(padding = 16.dp) {
+                Text("Tema", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Sistema", "Claro", "Escuro").forEachIndexed { i, l ->
+                        FilterChip(theme == i, { Prefs.setTheme(i) }, { Text(l) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Nv.Sky.copy(0.25f), selectedLabelColor = MaterialTheme.colorScheme.onSurface))
+                    }
+                }
+            }
+        }
+        item {
+            SectionTitle("Nuvem")
+            GlassCard(padding = 8.dp) {
+                var cleaning by remember { mutableStateOf(false) }
+                var cleanMsg by remember { mutableStateOf<String?>(null) }
+                SettingsLine(Icons.Rounded.CleaningServices, "Limpar legendas antigas", cleanMsg ?: if (cleaning) "Editando mensagens…" else "Tira o texto enorme das que já subiram e deixa só a hashtag curta", enabled = !cleaning) {
                     cleaning = true; cleanMsg = null
                     scope.launch {
                         try {
@@ -205,16 +138,22 @@ fun SettingsScreen(onLogout: () -> Unit) {
                         } catch (e: Exception) { cleanMsg = traduz(e.message) }
                         cleaning = false
                     }
-                })
+                }
+                DupCleanRow()
+                SecretSettingsRow()
+                SettingsLine(Icons.Rounded.Sync, "Reindexar nuvem", if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)", enabled = !syncing) {
+                    syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false }
+                }
+            }
         }
-        item { DupCleanRow() }
-        item { SecretSettingsRow() }
-        item { ListItem(headlineContent = { Text("Reindexar nuvem") }, supportingContent = { Text(if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)") },
-            leadingContent = { Icon(Icons.Rounded.Sync, null) }, modifier = Modifier.clickable(enabled = !syncing) { syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false } }) }
-        item { ListItem(headlineContent = { Text("Trocar destino") }, supportingContent = { Text("Escolher outro grupo, canal ou Mensagens Salvas") }, leadingContent = { Icon(Icons.Rounded.SwapHoriz, null) },
-            modifier = Modifier.clickable { Prefs.clearDest(); onLogout() }) }
-        item { ListItem(headlineContent = { Text("Sair / trocar de conta") }, supportingContent = { Text("Entrar com outro número. Os arquivos continuam no Telegram.") }, leadingContent = { Icon(Icons.AutoMirrored.Rounded.Logout, null) }, modifier = Modifier.clickable { confirmOut = true }) }
-        item { Text("Nuvem 1.5.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp)) }
+        item {
+            SectionTitle("Sessão")
+            GlassCard(padding = 8.dp) {
+                SettingsLine(Icons.Rounded.SwapHoriz, "Trocar destino", "Escolher outro grupo, canal ou Mensagens Salvas") { Prefs.clearDest(); onLogout() }
+                SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.") { confirmOut = true }
+            }
+        }
+        item { Text("Nuvem 1.6.0 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
     }
     if (emailDlg) AlertDialog({ emailDlg = false }, title = { Text("E-mail de login") },
         text = {
@@ -296,9 +235,12 @@ fun SecretAlbumsEntry(onOpen: (List<CloudItem>, Int) -> Unit) {
             withContext(Dispatchers.IO) { Db.allCloud(Prefs.secretChatId) } else emptyList()
     }
     if (!open) {
-        ListItem(headlineContent = { Text("Álbum secreto") }, supportingContent = { Text("Pastas protegidas por PIN ou digital") },
-            leadingContent = { Icon(Icons.Rounded.Lock, null) },
-            modifier = Modifier.clickable { unlock() })
+        GlassCard(onClick = { unlock() }, padding = 14.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                GlowIcon(Icons.Rounded.Lock, Nv.Violet, Nv.SkyDeep, 44.dp); Spacer(Modifier.width(12.dp))
+                Column { Text("Álbum secreto", style = MaterialTheme.typography.titleMedium); Text("Pastas protegidas por PIN ou digital", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        }
     } else {
         Column {
             ListItem(headlineContent = { Text("Álbum secreto") }, supportingContent = { Text("${items.size} itens") },
@@ -327,18 +269,17 @@ fun SamsungBatteryCard() {
         onDispose { life.lifecycle.removeObserver(obs) }
     }
     if (!show) return
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Pra o backup não parar no Samsung", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text("O celular costuma matar o backup com a tela desligada. Faz isso uma vez:", style = MaterialTheme.typography.bodyMedium)
-            Text("1. Toque em Permitir segundo plano e aceite não otimizar a bateria do Nuvem.")
-            Text("2. Vá em Configurações > Bateria > Limites de uso em segundo plano > Apps que nunca suspendem e adicione o Nuvem.")
-            Text("3. Nas informações do app, em Bateria, escolha Sem restrições.")
-            Text("Deixe as notificações permitidas pra acompanhar o progresso e o backup continuar.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
-            Button({ BatteryGuide.openBest(ctx) }) { Text("Permitir segundo plano") }
-            TextButton({ Prefs2.batteryGuideDismissed = true; show = false }) { Text("Já configurei") }
-        }
+    GlassCard(padding = 18.dp) {
+        Text("Pra o backup não parar no Samsung", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        Text("O celular costuma matar o backup com a tela desligada. Faz isso uma vez:", style = MaterialTheme.typography.bodyMedium)
+        Text("1. Toque em Permitir segundo plano e aceite não otimizar a bateria do Nuvem.")
+        Text("2. Vá em Configurações > Bateria > Limites de uso em segundo plano > Apps que nunca suspendem e adicione o Nuvem.")
+        Text("3. Nas informações do app, em Bateria, escolha Sem restrições.")
+        Text("Deixe as notificações permitidas pra acompanhar o progresso e o backup continuar.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        PillButton("Permitir segundo plano", Icons.Rounded.BatteryChargingFull, { BatteryGuide.openBest(ctx) })
+        TextButton({ Prefs2.batteryGuideDismissed = true; show = false }) { Text("Já configurei") }
     }
 }
 

@@ -102,7 +102,7 @@ fun WatchedScreen() {
                 IconButton({ confirmDel = true }) { Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error) }
             } else Text("Assistidos no Telegram", Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp), style = MaterialTheme.typography.headlineSmall)
         }
-        LazyVerticalGrid(GridCells.Adaptive(110.dp), Modifier.fillMaxSize(), contentPadding = PaddingValues(4.dp),
+        LazyVerticalGrid(GridCells.Adaptive(110.dp), Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 120.dp),
             horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             item(span = { GridItemSpan(maxLineSpan) }, key = "status") {
                 ElevatedCard(Modifier.fillMaxWidth().padding(4.dp)) {

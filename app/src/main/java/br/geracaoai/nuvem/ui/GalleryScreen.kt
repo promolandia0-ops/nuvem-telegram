@@ -11,6 +11,10 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,12 +25,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.work.WorkInfo
@@ -42,76 +49,160 @@ import java.util.*
 
 private val dayFmt = SimpleDateFormat("EEE, d 'de' MMM 'de' yyyy", Locale("pt", "BR"))
 
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun GalleryScreen(folder: String?, onOpen: (List<CloudItem>, Int) -> Unit) {
+fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Unit = {}, onOpen: (List<CloudItem>, Int) -> Unit) {
     val ctx = LocalContext.current
     val ver by Db.version.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
+    var innerFolder by remember(folder) { mutableStateOf(folder) }
     var all by remember { mutableStateOf<List<CloudItem>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var selected by remember { mutableStateOf(setOf<Long>()) }
+    var confirmDel by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(false) }
+    var restoreMsg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val showing = innerFolder
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { try { Repo.reconcileCloud() } catch (_: Exception) {} } }
-    LaunchedEffect(ver, folder) { all = withContext(Dispatchers.IO) { Db.allCloudMany(Prefs.galleryChats()).filter { folder == null || it.folder == folder } } }
+    LaunchedEffect(ver, showing, videosOnly) {
+        loading = true
+        all = withContext(Dispatchers.IO) {
+            Db.allCloudMany(Prefs.galleryChats()).filter {
+                (showing == null || it.folder == showing) && (!videosOnly || it.isVideo)
+            }
+        }
+        loading = false
+        selected = emptySet()
+    }
     val items = remember(all, query) {
-        if (query.isBlank()) all else { val q = query.lowercase(); all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() } }
+        if (query.isBlank()) all else {
+            val q = query.lowercase()
+            all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() }
+        }
     }
     val albums = remember(items) { items.groupBy { it.folder.ifBlank { "Sem pasta" } }.toList().sortedByDescending { it.second.maxOfOrNull { c -> c.taken } ?: 0L } }
     val daySections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
+    val selecting = selected.isNotEmpty()
+    val folderGrid = showing == null && !videosOnly && query.isBlank()
+    val title = when {
+        selecting -> "${selected.size} selecionados"
+        videosOnly -> "Vídeos"
+        showing != null -> folderLabel(showing)
+        else -> "Fotos"
+    }
+    fun goBack() {
+        if (selecting) { selected = emptySet(); return }
+        if (folder == null && showing != null) { innerFolder = null; return }
+        onBack()
+    }
+    androidx.activity.compose.BackHandler(showing != folder || selecting || videosOnly) { goBack() }
+
     Column(Modifier.fillMaxSize()) {
-        if (folder == null) {
-            SearchBar(query, { query = it }, {}, false, {}, Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                placeholder = { Text("Buscar por nome, data ou pasta") }, leadingIcon = { Icon(Icons.Rounded.Search, null) },
-                trailingIcon = { if (query.isNotEmpty()) IconButton({ query = "" }) { Icon(Icons.Rounded.Close, null) } }) {}
-        }
-        LazyVerticalGrid(GridCells.Adaptive(96.dp), Modifier.fillMaxSize(), contentPadding = PaddingValues(2.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (folder == null) item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpCard() }
-            if (items.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
-                Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
-                    Text(if (query.isBlank()) "Nada na nuvem ainda.\nEscolha pastas em Backup para começar." else "Nada encontrado.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (showing != null || videosOnly || (folder == null && showing != null)) {
+                // show back when drilled in or videos filter from home
             }
-            if (folder == null) {
-                albums.forEach { (album, albumItems) ->
-                    item(span = { GridItemSpan(maxLineSpan) }, key = "a$album") {
-                        val scope = rememberCoroutineScope()
-                        var restoring by remember { mutableStateOf(false) }
-                        var restoreMsg by remember { mutableStateOf<String?>(null) }
-                        Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 16.dp, end = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("📁 $album", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            TextButton(enabled = !restoring, onClick = {
-                                restoring = true
-                                scope.launch {
-                                    val (ok, total) = try { Repo.restoreAlbum(ctx, album) } catch (_: Exception) { 0 to albumItems.size }
-                                    restoreMsg = "Restaurados $ok de $total na pasta original (ou em Nuvem/$album)."
-                                    restoring = false
-                                }
-                            }) { Text(if (restoring) "Restaurando…" else "Restaurar álbum") }
-                        }
-                        restoreMsg?.let { msg -> AlertDialog({ restoreMsg = null }, confirmButton = { TextButton({ restoreMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
+            if (showing != null || videosOnly) IconButton({ goBack() }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
+            Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
+            if (selecting) {
+                IconButton({ selected = items.map { it.msgId }.toSet() }) { Icon(Icons.Rounded.SelectAll, "Tudo") }
+                IconButton({ selected = emptySet() }) { Icon(Icons.Rounded.Close, "Cancelar") }
+            } else if (showing != null) {
+                TextButton(enabled = !restoring, onClick = {
+                    restoring = true
+                    val alb = showing
+                    scope.launch {
+                        val (ok, total) = try { Repo.restoreAlbum(ctx, alb) } catch (_: Exception) { 0 to items.size }
+                        restoreMsg = "Restaurados $ok de $total na pasta original (ou em Nuvem/${folderLabel(alb)})."
+                        restoring = false
                     }
-                    albumItems.groupBy { dayFmt.format(Date(it.taken)) }.forEach { (day, list) ->
-                        item(span = { GridItemSpan(maxLineSpan) }, key = "h$album$day") {
-                            Text(day.replaceFirstChar { it.uppercase() }, Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
-                                style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        items(list, key = { it.msgId }) { ci ->
-                            Thumb(ci, Modifier.animateItem().aspectRatio(1f).clickable { onOpen(items, items.indexOf(ci)) })
-                        }
+                }) { Text(if (restoring) "Restaurando…" else "Restaurar") }
+            }
+        }
+        if (folderGrid || (showing == null && !videosOnly)) {
+            OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                placeholder = { Text("Buscar por nome, data ou pasta") }, leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                trailingIcon = { if (query.isNotEmpty()) IconButton({ query = "" }) { Icon(Icons.Rounded.Close, null) } },
+                singleLine = true, shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White.copy(0.06f), focusedContainerColor = Color.White.copy(0.08f)))
+        }
+        LazyVerticalGrid(
+            GridCells.Adaptive(if (folderGrid) 158.dp else 104.dp),
+            Modifier.weight(1f),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = if (selecting) 168.dp else 120.dp, top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (loading && items.isEmpty()) {
+                items(8, key = { "sk$it" }) { ShimmerBlock(Modifier.aspectRatio(1f)) }
+            } else if (items.isEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    EmptyCloud(if (query.isBlank()) "Nada na nuvem ainda" else "Nada encontrado", if (query.isBlank()) "Escolha pastas no Início e toque em Iniciar." else "Tente outro termo de busca.")
+                }
+            } else if (folderGrid) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "secret") { SecretAlbumsEntry(onOpen) }
+                items(albums, key = { "al${it.first}" }) { (album, albumItems) ->
+                    GlassCard(Modifier.animateItem(), onClick = { innerFolder = album }, radius = 20.dp, padding = 8.dp) {
+                        Thumb(albumItems.first(), Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)))
+                        Text(folderLabel(album), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp))
+                        Text("${albumItems.size} itens", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
                     }
                 }
             } else {
                 daySections.forEach { (day, list) ->
                     item(span = { GridItemSpan(maxLineSpan) }, key = "h$day") {
-                        Text(day.replaceFirstChar { it.uppercase() }, Modifier.padding(start = 12.dp, top = 16.dp, bottom = 8.dp),
-                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text(day.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
                     }
                     items(list, key = { it.msgId }) { ci ->
-                        Thumb(ci, Modifier.animateItem().aspectRatio(1f).clickable { onOpen(items, items.indexOf(ci)) })
+                        val on = ci.msgId in selected
+                        Box(Modifier.animateItem().aspectRatio(1f).clip(RoundedCornerShape(14.dp)).combinedClickable(
+                            onClick = {
+                                if (selecting) selected = if (on) selected - ci.msgId else selected + ci.msgId
+                                else onOpen(items, items.indexOf(ci))
+                            },
+                            onLongClick = { selected = selected + ci.msgId }
+                        )) {
+                            Thumb(ci, Modifier.fillMaxSize())
+                            androidx.compose.animation.AnimatedVisibility(on, modifier = Modifier.align(Alignment.TopEnd), enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
+                                Icon(Icons.Rounded.CheckCircle, null, Modifier.padding(6.dp).size(24.dp).graphicsLayer { }, tint = Nv.Cyan)
+                            }
+                            if (selecting && !on) {
+                                Box(Modifier.align(Alignment.TopEnd).padding(8.dp).size(18.dp).clip(CircleShape).background(Color.Black.copy(0.35f)).border(1.5.dp, Color.White.copy(0.8f), CircleShape))
+                            }
+                        }
                     }
                 }
             }
         }
+        AnimatedVisibility(selecting, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 96.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xE6151C33)).padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                TextButton({
+                    restoring = true
+                    scope.launch {
+                        val chosen = items.filter { it.msgId in selected }
+                        var ok = 0
+                        chosen.forEach { if (try { Repo.restore(ctx, it) } catch (_: Exception) { false }) ok++ }
+                        restoreMsg = "Restaurados $ok de ${chosen.size}."
+                        restoring = false; selected = emptySet()
+                    }
+                }) { Icon(Icons.Rounded.Download, null, tint = Color.White); Spacer(Modifier.width(6.dp)); Text("Restaurar", color = Color.White) }
+                TextButton({ confirmDel = true }) { Icon(Icons.Rounded.DeleteOutline, null, tint = Nv.Rose); Spacer(Modifier.width(6.dp)); Text("Apagar", color = Nv.Rose) }
+            }
+        }
     }
+    restoreMsg?.let { msg -> AlertDialog({ restoreMsg = null }, confirmButton = { TextButton({ restoreMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
+    if (confirmDel) AlertDialog({ confirmDel = false }, title = { Text("Apagar ${selected.size} itens da nuvem?") },
+        text = { Text("Eles serão apagados permanentemente do Telegram. Se não houver cópia no celular, serão perdidos para sempre.") },
+        confirmButton = { Button({
+            val ids = selected
+            confirmDel = false; selected = emptySet()
+            scope.launch {
+                items.filter { it.msgId in ids }.forEach { try { Repo.deleteFromCloud(it) } catch (_: Exception) {} }
+            }
+        }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Apagar") } },
+        dismissButton = { TextButton({ confirmDel = false }) { Text("Cancelar") } })
 }
 
 private val thumbCache = Collections.synchronizedMap(object : LinkedHashMap<Long, String>(500, 0.75f, true) {
@@ -121,7 +212,7 @@ private val thumbCache = Collections.synchronizedMap(object : LinkedHashMap<Long
 fun Thumb(ci: CloudItem, modifier: Modifier) {
     val path by produceState(thumbCache[ci.msgId], ci.msgId) { if (value == null) value = Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
     val mini = remember(ci.msgId) { ci.mini?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
-    Box(modifier.clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
+    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f))) {
         if (mini != null) Image(mini, null, Modifier.fillMaxSize().blur(8.dp), contentScale = ContentScale.Crop)
         AnimatedVisibility(path != null, enter = fadeIn()) { AsyncImage(path?.let { File(it) }, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
         if (path == null && mini == null) Icon(if (ci.isVideo) Icons.Rounded.Movie else Icons.Rounded.Image, null, Modifier.align(Alignment.Center), tint = MaterialTheme.colorScheme.onSurfaceVariant)

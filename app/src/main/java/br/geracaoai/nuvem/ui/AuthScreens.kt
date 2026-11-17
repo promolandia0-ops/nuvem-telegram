@@ -26,18 +26,20 @@ import org.drinkless.tdlib.TdApi
 
 @Composable
 fun AuthFrame(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, sub: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(40.dp))
-        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.primaryContainer) {
-            Icon(icon, null, Modifier.padding(20.dp).size(40.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+    AuroraBackdrop {
+        Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.height(36.dp))
+            GlowIcon(icon, Nv.Sky, Nv.Violet, 72.dp)
+            Spacer(Modifier.height(20.dp))
+            Text("Nuvem", style = MaterialTheme.typography.labelLarge, color = Nv.Sky)
+            Spacer(Modifier.height(6.dp))
+            Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(24.dp))
+            content()
         }
-        Spacer(Modifier.height(20.dp))
-        Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
-        Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(24.dp))
-        content()
     }
 }
 
