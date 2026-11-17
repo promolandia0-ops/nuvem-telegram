@@ -43,13 +43,31 @@ class UiWiringTest {
         compose.onNodeWithText("Restaurar álbum").assertIsDisplayed()
     }
 
-    @Test fun liberarEspacoOpensPaneWithCountAndConfirm() {
+    @Test fun liberarEspacoOpensBackedFolderList() {
         host()
         compose.onNodeWithTag(FeatureTags.SHORTCUT_LIBERAR).performClick()
         compose.onNodeWithTag(FeatureTags.PANE_LIBERAR).assertIsDisplayed()
-        compose.onNodeWithText("3 itens já salvos no Telegram", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("Liberar 12 MB").performClick()
-        compose.onNodeWithText("Mover 3 itens para a lixeira?").assertIsDisplayed()
+        compose.onNodeWithText("Câmera").assertIsDisplayed()
+        compose.onNodeWithText("DCIM").assertIsDisplayed()
+    }
+
+    @Test fun liberarFolderSelectAllSkipsUnsavedAndConfirms() {
+        host()
+        compose.onNodeWithTag(FeatureTags.SHORTCUT_LIBERAR).performClick()
+        compose.onNodeWithTag(FeatureTags.liberarPastaTag("Camera")).performClick()
+        compose.onNodeWithTag(FeatureTags.PANE_PASTA_LIBERAR).assertExists()
+        compose.onNodeWithText("Selecionar todos").assertIsDisplayed()
+        compose.onNodeWithText("não salvo").assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.FILTER_TODOS).assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.FILTER_APARELHO).assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.FILTER_NUVEM).assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.BTN_SELECIONAR_TODOS).performClick()
+        compose.onNodeWithText("2 itens • 12 MB").assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.BTN_DESMARCAR_TODOS).performClick()
+        compose.onNodeWithText("Nenhum selecionado").assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.BTN_SELECIONAR_TODOS).performClick()
+        compose.onNodeWithTag(FeatureTags.BTN_LIBERAR_PASTA).performClick()
+        compose.onNodeWithText("Mover 2 itens para a lixeira?").assertIsDisplayed()
         compose.onNodeWithText("Mover para a lixeira").assertIsDisplayed()
     }
 
@@ -77,6 +95,7 @@ class UiWiringTest {
         compose.onNodeWithTag(FeatureTags.SHORTCUT_AJUSTES).performClick()
         compose.onNodeWithTag(FeatureTags.SETTINGS_LIBERAR).performScrollTo().performClick()
         compose.onNodeWithTag(FeatureTags.PANE_LIBERAR).assertIsDisplayed()
+        compose.onNodeWithText("Câmera").assertIsDisplayed()
     }
 
     @Test fun settingsDestinoOpensConfirm() {

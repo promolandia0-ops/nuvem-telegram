@@ -55,6 +55,7 @@ data class FolderProgress(
 @Composable
 fun BackupScreen(
     onFotos: (folder: String?, videosOnly: Boolean) -> Unit = { _, _ -> },
+    onBrowseFolder: (String) -> Unit = {},
     onSettings: () -> Unit = {},
     onAssistidos: () -> Unit = {},
 ) {
@@ -196,7 +197,7 @@ fun BackupScreen(
             items(3, key = { "sk$it" }) { ShimmerBlock(Modifier.fillMaxWidth().height(88.dp)) }
         }
         itemsIndexed(folders.filter { it.included || showFolders }, key = { _, f -> f.name }) { i, f ->
-            FolderCard(f, Modifier.animateItem(fadeInSpec = spring(stiffness = Spring.StiffnessMediumLow)), onOpen = { onFotos(f.name, false) }, onToggle = {
+            BackupFolderCard(f, Modifier.animateItem(fadeInSpec = spring(stiffness = Spring.StiffnessMediumLow)), onOpen = { if (FolderMedia.hasBackup(f.included, f.cloudCount)) onBrowseFolder(f.name) else onFotos(f.name, false) }, onToggle = {
                 sel = if (f.name in sel) sel - f.name else sel + f.name; save()
             }, onSecret = {
                 val next = if (f.name in Prefs.secretFolders) Prefs.secretFolders - f.name else Prefs.secretFolders + f.name
@@ -227,7 +228,7 @@ fun BackupScreen(
             }
         }
     }
-    if (showFree) FreeUpSheet({ showFree = false })
+    if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = { onBrowseFolder(it) }, folders = folders)
     if (showDups) ModalBottomSheet({ showDups = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.testTag(FeatureTags.PANE_DUPLICADAS).padding(16.dp).navigationBarsPadding()) {
             Text("Duplicadas", style = MaterialTheme.typography.titleLarge)
@@ -241,7 +242,7 @@ fun BackupScreen(
 }
 
 @Composable
-private fun FolderCard(f: FolderProgress, modifier: Modifier = Modifier, onOpen: () -> Unit, onToggle: () -> Unit, onSecret: () -> Unit, showManage: Boolean) {
+fun BackupFolderCard(f: FolderProgress, modifier: Modifier = Modifier, onOpen: () -> Unit, onToggle: () -> Unit, onSecret: () -> Unit, showManage: Boolean) {
     GlassCard(modifier.fillMaxWidth(), onClick = onOpen, radius = 22.dp, padding = 12.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Mosaic(f.covers, f.secret)

@@ -122,6 +122,15 @@ fun fmtBytes(b: Long): String {
     }
 }
 
+fun fmtDuration(ms: Long): String {
+    if (ms <= 0L) return ""
+    val s = (ms / 1000L).toInt()
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
+
 fun folderLabel(name: String): String = when (name.trim().lowercase()) {
     "camera", "câmera", "camara" -> "Câmera"
     "screenshots", "screenshot", "capturas de tela", "capturas" -> "Capturas"

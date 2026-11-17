@@ -84,7 +84,7 @@ fun SettingsLine(icon: androidx.compose.ui.graphics.vector.ImageVector, title: S
 }
 
 @Composable
-fun SettingsScreen(onLogout: () -> Unit) {
+fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val theme by Prefs.theme.collectAsStateWithLifecycle()
     var confirmOut by remember { mutableStateOf(false) }
@@ -158,9 +158,9 @@ fun SettingsScreen(onLogout: () -> Unit) {
                 SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.", tag = FeatureTags.SETTINGS_SAIR) { confirmOut = true }
             }
         }
-        item { Text("Nuvem 1.6.2 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
+        item { Text("Nuvem 1.6.3 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
     }
-    if (showFree) FreeUpSheet({ showFree = false })
+    if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = onBrowseFolder)
     if (destConfirm) AlertDialog(
         { destConfirm = false },
         title = { Text("Trocar destino?") },

@@ -54,7 +54,7 @@ private val dayFmt = SimpleDateFormat("EEE, d 'de' MMM 'de' yyyy", Locale("pt", 
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Unit = {}, onOpen: (List<CloudItem>, Int) -> Unit) {
+fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Unit = {}, onBrowseFolder: (String) -> Unit = {}, onOpen: (List<CloudItem>, Int) -> Unit) {
     val ctx = LocalContext.current
     val ver by Db.version.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
@@ -137,7 +137,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
                     EmptyCloud(if (query.isBlank()) "Nada na nuvem ainda" else "Nada encontrado", if (query.isBlank()) "Escolha pastas no Início e toque em Iniciar." else "Tente outro termo de busca.")
                 }
             } else if (folderGrid) {
-                item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpCard() }
+                item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpEntry(onBrowseFolder) }
                 item(span = { GridItemSpan(maxLineSpan) }, key = "secret") { SecretAlbumsEntry(onOpen) }
                 items(albums, key = { "al${it.first}" }) { (album, albumItems) ->
                     GlassCard(Modifier.animateItem(), onClick = { innerFolder = album }, radius = 20.dp, padding = 8.dp) {
@@ -236,14 +236,28 @@ fun Thumb(ci: CloudItem, modifier: Modifier) {
     }
 }
 
-/** Tela de Liberar espaço: sempre mostra título, carregando, vazio ou a lista. */
+/** Atalho compacto na grade de álbuns: abre a lista de pastas com backup. */
+@Composable
+fun FreeUpEntry(onBrowseFolder: (String) -> Unit, modifier: Modifier = Modifier) {
+    var show by remember { mutableStateOf(false) }
+    GlassCard(modifier.fillMaxWidth(), onClick = { show = true }, radius = 20.dp, padding = 14.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.CleaningServices, null, tint = Nv.Gold)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Liberar espaço", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("Abra uma pasta com backup pra revisar e apagar o que já está no Telegram.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+    if (show) FreeFoldersSheet({ show = false }, onOpenFolder = onBrowseFolder)
+}
+
+/** Tela de Liberar espaço: lista das pastas com backup. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FreeUpSheet(onClose: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        FreeUpCard(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp).testTag(FeatureTags.PANE_LIBERAR))
-        Spacer(Modifier.height(16.dp))
-    }
+fun FreeUpSheet(onClose: () -> Unit, onOpenFolder: (String) -> Unit = {}, folders: List<FolderProgress>? = null) {
+    FreeFoldersSheet(onClose, onOpenFolder, folders)
 }
 
 /** Card/tela de "Liberar espaço". Só conta arquivos com hash+tamanho já confirmados na nuvem. Nunca fica em branco. */

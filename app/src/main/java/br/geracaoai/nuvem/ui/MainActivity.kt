@@ -88,6 +88,7 @@ fun MainShell(onLogout: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var galleryFolder by rememberSaveable { mutableStateOf<String?>(null) }
     var videosOnly by rememberSaveable { mutableStateOf(false) }
+    var browseFolder by rememberSaveable { mutableStateOf<String?>(null) }
     var viewer by remember { mutableStateOf<Pair<List<CloudItem>, Int>?>(null) }
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     LaunchedEffect(Unit) {
@@ -96,7 +97,8 @@ fun MainShell(onLogout: () -> Unit) {
         try { Repo.ensureDestination(); Repo.reconcileCloud(); Repo.syncIndex() } catch (_: Exception) {}
     }
     BackHandler(viewer != null) { viewer = null }
-    BackHandler(viewer == null && tab == 1 && (galleryFolder != null || videosOnly)) { galleryFolder = null; videosOnly = false }
+    BackHandler(viewer == null && browseFolder != null) { browseFolder = null }
+    BackHandler(viewer == null && browseFolder == null && tab == 1 && (galleryFolder != null || videosOnly)) { galleryFolder = null; videosOnly = false }
     AuroraBackdrop {
         Box(Modifier.fillMaxSize().statusBarsPadding()) {
             AnimatedContent(tab, Modifier.fillMaxSize(), transitionSpec = {
@@ -106,15 +108,19 @@ fun MainShell(onLogout: () -> Unit) {
                 when (t) {
                     0 -> BackupScreen(
                         onFotos = { f, v -> galleryFolder = f; videosOnly = v; tab = 1 },
+                        onBrowseFolder = { browseFolder = it },
                         onSettings = { tab = 3 },
                         onAssistidos = { tab = 2 },
                     )
-                    1 -> GalleryScreen(galleryFolder, videosOnly, onBack = { galleryFolder = null; videosOnly = false }) { l, i -> viewer = l to i }
+                    1 -> GalleryScreen(galleryFolder, videosOnly, onBack = { galleryFolder = null; videosOnly = false }, onBrowseFolder = { browseFolder = it }) { l, i -> viewer = l to i }
                     2 -> WatchedScreen()
-                    else -> SettingsScreen(onLogout)
+                    else -> SettingsScreen(onLogout, onBrowseFolder = { browseFolder = it })
                 }
             }
             NvNavBar(tab, { n -> tab = n; if (n != 1) { galleryFolder = null; videosOnly = false } }, Modifier.align(Alignment.BottomCenter))
+            if (browseFolder != null && viewer == null) {
+                FolderBrowseScreen(browseFolder!!, onBack = { browseFolder = null }) { l, i -> viewer = l to i }
+            }
             AnimatedVisibility(viewer != null, enter = fadeIn() + scaleIn(initialScale = 0.92f), exit = fadeOut() + scaleOut(targetScale = 0.92f)) {
                 viewer?.let { (l, i) -> ViewerScreen(l, i) { viewer = null } }
             }

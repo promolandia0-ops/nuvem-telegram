@@ -858,6 +858,13 @@ object Repo {
         return Freeable(items, items.sumOf { it.size })
     }
 
+    /** Itens da pasta pra tela de Liberar: locais (salvos ou não) + só na nuvem. Só lê o banco local. */
+    fun folderMedia(c: Context, bucket: String): List<FolderMediaItem> {
+        val local = LocalMedia.inBucket(c, bucket)
+        val cloud = Db.allCloudMany(Prefs.galleryChats()).filter { it.folder == bucket }
+        return FolderMedia.merge(local, cloud) { i -> Db.cachedHash(i.path, i.size, i.mtime) }
+    }
+
     /** Verificação rigorosa antes de apagar: confere na hora se a mensagem ainda existe no Telegram. */
     suspend fun verifyForDelete(items: List<LocalItem>, onProgress: (Int) -> Unit): List<LocalItem> = withContext(Dispatchers.IO) {
         items.filterIndexed { idx, i ->

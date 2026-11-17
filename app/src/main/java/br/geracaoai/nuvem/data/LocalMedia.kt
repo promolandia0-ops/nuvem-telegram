@@ -7,7 +7,7 @@ import android.provider.MediaStore
 
 data class LocalItem(val uri: Uri, val path: String, val name: String, val size: Long, val taken: Long,
                      val mtime: Long, val bucket: String, val relPath: String, val mime: String,
-                     val mediaId: Long = 0)
+                     val mediaId: Long = 0, val durationMs: Long = 0)
 
 data class Bucket(val name: String, val count: Int)
 data class BucketStat(val name: String, val count: Int, val bytes: Long)
