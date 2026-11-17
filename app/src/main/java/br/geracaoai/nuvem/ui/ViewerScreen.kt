@@ -1,6 +1,5 @@
 package br.geracaoai.nuvem.ui
 
-import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,15 +21,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.ui.PlayerView
 import br.geracaoai.nuvem.data.CloudItem
 import br.geracaoai.nuvem.data.Repo
-import br.geracaoai.nuvem.tg.TdDataSource
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import java.io.File
@@ -48,14 +40,19 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
     var info by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val cur = items.getOrNull(pager.currentPage)
+    val curIsVideo = cur?.isVideo == true
     Box(Modifier.fillMaxSize().background(Color.Black)) {
+        if (curIsVideo && cur != null) {
+            VideoPlayer(items, pager.currentPage, { i -> scope.launch { pager.scrollToPage(i) } }, onClose)
+        } else {
         HorizontalPager(pager, Modifier.fillMaxSize(), key = { items[it].msgId }) { p ->
             val ci = items[p]
             Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { chrome = !chrome }, contentAlignment = Alignment.Center) {
-                if (ci.isVideo) VideoPage(ci, pager.currentPage == p) else PhotoPage(ci)
+                if (ci.isVideo) Box(Modifier.fillMaxSize()) else PhotoPage(ci)
             }
         }
-        AnimatedVisibility(chrome, enter = fadeIn(), exit = fadeOut()) {
+        }
+        AnimatedVisibility(chrome && !curIsVideo, enter = fadeIn(), exit = fadeOut()) {
             Column(Modifier.fillMaxSize()) {
                 TopAppBar(title = { Text(cur?.name ?: "", maxLines = 1) },
                     navigationIcon = { IconButton(onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar") } },
@@ -102,24 +99,4 @@ private fun PhotoPage(ci: CloudItem) {
         Crossfade(full, label = "full") { f -> if (f != null) AsyncImage(File(f), ci.name, m, contentScale = ContentScale.Fit) }
         if (full == null) CircularProgressIndicator(Modifier.size(32.dp), color = Color.White)
     }
-}
-
-@OptIn(UnstableApi::class)
-@Composable
-private fun VideoPage(ci: CloudItem, active: Boolean) {
-    val ctx = LocalContext.current
-    val media by produceState<Pair<Int, Long>?>(null, ci.msgId) {
-        value = try { Repo.fileOf(Repo.message(ci))?.let { it.id to it.size } } catch (_: Exception) { null }
-    }
-    val d = media
-    if (d == null || !active) { Thumb(ci, Modifier.fillMaxWidth().aspectRatio(1f)); return }
-    val player = remember(ci.msgId) {
-        ExoPlayer.Builder(ctx).build().apply {
-            setMediaSource(ProgressiveMediaSource.Factory(TdDataSource.Factory(d.first, d.second))
-                .createMediaSource(MediaItem.fromUri("tdlib://file/${d.first}")))
-            prepare(); playWhenReady = true
-        }
-    }
-    DisposableEffect(player) { onDispose { player.release() } }
-    AndroidView({ PlayerView(it).apply { this.player = player } }, Modifier.fillMaxSize())
 }

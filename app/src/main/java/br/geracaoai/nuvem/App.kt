@@ -15,6 +15,8 @@ class App : Application() {
         Db.init(this)
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(Backup.CHANNEL, "Backup", NotificationManager.IMPORTANCE_LOW))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(br.geracaoai.nuvem.play.PlaybackService.CHANNEL, "Player", NotificationManager.IMPORTANCE_LOW))
         Td.init(this)
         Backup.schedule(this)
         br.geracaoai.nuvem.work.WatchedSync.schedule(this)

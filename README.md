@@ -24,7 +24,8 @@ App Android (Kotlin + Jetpack Compose + TDLib) que usa a sua própria conta do T
 - Restaurar um álbum inteiro nas pastas originais
 - Canal/grupo secreto, pastas escolhidas, protegido por PIN ou digital
 - Até 2 GB por arquivo (4 GB com Premium)
-- Linha do tempo por data, álbuns por pasta, busca, visualizador com zoom e streaming de vídeo
+- Linha do tempo por data, álbuns por pasta, busca, visualizador de fotos com zoom
+- Player de vídeo no próprio app (streaming pelo Telegram, começa a tocar enquanto baixa, com indicador de carregamento). Controles: rotação, brilho/volume por gesto, toque duplo ±6 s, zoom, travar tela, velocidade 0,25×–4×, repetir/A-B, anterior/próximo, retomar posição, PiP, áudio em segundo plano, temporizador, faixa de áudio, captura de quadro, detalhes, compartilhar, baixar e apagar.
 - Restaurar para o celular, apagar da nuvem (com confirmação)
 - Ao abrir o app e antes de mostrar “Liberar armazenamento”, confere no Telegram o que ainda existe. Se você apagou ou limpou o histórico, some da galeria e do card de liberar espaço, e o próximo backup reenvia o que ainda estiver no celular. Antes de apagar do aparelho, confere de novo cada mensagem.
 - Sessão do Telegram salva no aparelho (não precisa redigitar o número ao reabrir). É possível cadastrar um e-mail de login; não existe entrada com conta Google.

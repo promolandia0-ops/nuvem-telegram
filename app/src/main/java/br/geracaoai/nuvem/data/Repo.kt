@@ -22,6 +22,12 @@ import java.io.FileOutputStream
 
 data class Freeable(val items: List<LocalItem>, val bytes: Long)
 
+/** Arquivo de vídeo pronto para o player (id da sessão atual + tamanho real). */
+data class Playable(
+    val fileId: Int, val size: Long, val mime: String, val name: String,
+    val uniqueId: String, val remoteId: String, val path: String, val complete: Boolean,
+)
+
 /** Arquivo remoto de uma mensagem (foto maior, vídeo ou documento). */
 data class RemoteFile(val file: TdApi.File, val name: String, val mime: String, val mini: ByteArray?, val isPhoto: Boolean, val uniqueId: String = "")
 
@@ -773,6 +779,74 @@ object Repo {
 
     // ---------- Arquivos da nuvem ----------
     suspend fun message(ci: CloudItem): TdApi.Message = Td.send(TdApi.GetMessage(ci.chatId, ci.msgId))
+
+    /**
+     * Resolve o arquivo atual no TDLib (o file id muda a cada sessão).
+     * Usa GetMessage, e se falhar tenta o remote id / uniqueId.
+     * Já dispara o download do começo, com prioridade alta, pra o player começar rápido.
+     */
+    suspend fun playable(ci: CloudItem): Playable = withContext(Dispatchers.IO) {
+        val orig = originalItem(ci)?.takeIf {
+            it.mime.startsWith("video/") || it.mime.contains("mp4") || it.mime.contains("quicktime")
+        }
+        val candidates = listOfNotNull(orig, ci).distinctBy { it.msgId to it.chatId }
+        var lastErr: Exception? = null
+        var file: TdApi.File? = null
+        var mime = ci.mime.ifBlank { "video/mp4" }
+        var name = ci.name
+        var unique = ci.uniqueId
+        var remoteId = ""
+        for (src in candidates) {
+            try {
+                val msg = message(src)
+                val rf = remoteOf(msg) ?: continue
+                file = rf.file
+                mime = rf.mime.ifBlank { mime }
+                name = rf.name.ifBlank { name }
+                unique = rf.uniqueId.ifBlank { unique }
+                remoteId = rf.file.remote?.id ?: remoteId
+                if (file != null && file.id > 0) break
+            } catch (e: Exception) { lastErr = e }
+        }
+        if (file == null || file.id <= 0) {
+            val ids = listOf(remoteId, unique, ci.uniqueId).filter { it.isNotBlank() }.distinct()
+            val types = listOf(TdApi.FileTypeVideo(), TdApi.FileTypeDocument(), TdApi.FileTypeAnimation(), TdApi.FileTypeNone())
+            loop@ for (id in ids) for (tp in types) {
+                try {
+                    val f = Td.send(TdApi.GetRemoteFile(id, tp), 15_000)
+                    if (f != null && f.id > 0) { file = f; break@loop }
+                } catch (e: Exception) { lastErr = e }
+            }
+        }
+        val opened = file ?: throw TdException((lastErr as? TdException)?.code ?: 404,
+            lastErr?.message ?: "Não achei este vídeo no Telegram. Ele pode ter sido apagado.")
+        val fresh = try { Td.send(TdApi.GetFile(opened.id), 15_000) } catch (_: Exception) { opened }
+        if (fresh.id <= 0) throw TdException(400, "O Telegram não reconheceu o arquivo deste vídeo. Tente de novo.")
+        br.geracaoai.nuvem.tg.TgStream.update(fresh)
+        val size = PlaybackFile.resolvedSize(fresh.size, fresh.expectedSize, ci.size)
+        try {
+            val started = Td.send(TdApi.DownloadFile(fresh.id, 32, 0, 0, false), 20_000)
+            br.geracaoai.nuvem.tg.TgStream.update(started)
+            val loc = started.local
+            val path = loc?.path ?: fresh.local?.path ?: ""
+            val done = loc?.isDownloadingCompleted == true
+            return@withContext Playable(started.id, PlaybackFile.resolvedSize(started.size, started.expectedSize, size),
+                mime, name, started.remote?.uniqueId ?: unique, started.remote?.id ?: remoteId, path, done)
+        } catch (e: TdException) {
+            // file id inválido nesta sessão: última tentativa pelo remote id
+            if ("FILE_ID" in (e.message ?: "").uppercase() || e.code == 400) {
+                val rid = fresh.remote?.id?.ifBlank { remoteId } ?: remoteId
+                if (rid.isNotBlank()) {
+                    val f2 = Td.send(TdApi.GetRemoteFile(rid, TdApi.FileTypeVideo()), 15_000)
+                    Td.send(TdApi.DownloadFile(f2.id, 32, 0, 0, false), 20_000)
+                    br.geracaoai.nuvem.tg.TgStream.update(f2)
+                    val sz = PlaybackFile.resolvedSize(f2.size, f2.expectedSize, size)
+                    return@withContext Playable(f2.id, sz, mime, name, f2.remote?.uniqueId ?: unique, f2.remote?.id ?: rid, f2.local?.path ?: "", f2.local?.isDownloadingCompleted == true)
+                }
+            }
+            throw TdException(e.code, "Não deu pra começar o download: ${e.message ?: "erro"}")
+        }
+    }
 
     suspend fun thumbPath(ci: CloudItem): String? = try {
         val t = thumbFileOf(message(ci))

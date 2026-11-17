@@ -1,7 +1,12 @@
 package br.geracaoai.nuvem.ui
 
 import android.Manifest
+import android.app.PictureInPictureParams
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,6 +24,7 @@ import androidx.compose.ui.Modifier
 import br.geracaoai.nuvem.data.CloudItem
 import br.geracaoai.nuvem.data.Prefs
 import br.geracaoai.nuvem.data.Repo
+import br.geracaoai.nuvem.play.PlayerHolder
 import br.geracaoai.nuvem.tg.Td
 import org.drinkless.tdlib.TdApi
 
@@ -27,6 +33,30 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { NuvemTheme { Surface { Root() } } }
+    }
+
+    fun aplicarOrientacao(codigo: Int) { requestedOrientation = codigo }
+
+    fun brilho(v: Float) { window.attributes = window.attributes.apply { screenBrightness = v.coerceIn(0.01f, 1f) } }
+
+    fun entrarPip(): Boolean {
+        return try {
+            if (PlayerHolder.player?.isPlaying != true) return false
+            val vs = PlayerHolder.player?.videoSize
+            val ratio = if (vs != null && vs.width > 0 && vs.height > 0) Rational(vs.width, vs.height) else Rational(16, 9)
+            val params = PictureInPictureParams.Builder().setAspectRatio(ratio).build()
+            enterPictureInPictureMode(params)
+        } catch (_: Exception) { false }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (PlayerHolder.shouldEnterPip && PlayerHolder.player?.isPlaying == true) entrarPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        PlayerHolder.keepAlive = isInPictureInPictureMode || PlayerHolder.backgroundAudio
     }
 }
 

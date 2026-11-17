@@ -50,7 +50,7 @@ object Td {
                 if (s is TdApi.AuthorizationStateWaitTdlibParameters) sendParams()
                 if (s is TdApi.AuthorizationStateClosed) { client = null; init(app) }
             }
-            is TdApi.UpdateFile -> fileUpdates.tryEmit(o.file)
+            is TdApi.UpdateFile -> { fileUpdates.tryEmit(o.file); TgStream.update(o.file) }
             is TdApi.UpdateMessageSendSucceeded -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(o.message, null))
             is TdApi.UpdateMessageSendFailed -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(null, o.error))
             is TdApi.UpdateOption -> if (o.name == "is_premium") isPremium.value = (o.value as? TdApi.OptionValueBoolean)?.value == true
@@ -77,7 +77,7 @@ object Td {
             useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
             apiId = id; apiHash = hash
             systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.4.2"
+            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.5.0"
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }
