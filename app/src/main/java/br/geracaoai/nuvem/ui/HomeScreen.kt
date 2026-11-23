@@ -1,5 +1,12 @@
 package br.geracaoai.nuvem.ui
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.core.Spring
@@ -87,6 +94,26 @@ fun BackupScreen(
     var showDups by remember { mutableStateOf(false) }
     var showRestore by remember { mutableStateOf(false) }
     var allBuckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
+    var confirmFree by remember { mutableStateOf(false) }
+    var verifyingFree by remember { mutableStateOf(false) }
+    var verifyProg by remember { mutableIntStateOf(0) }
+    var verifyTotal by remember { mutableIntStateOf(0) }
+    var verifiedFree by remember { mutableStateOf<List<LocalItem>>(emptyList()) }
+    var freeMsg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val summary by DiscoverStore.summary.collectAsStateWithLifecycle()
+    val scanning by DiscoverStore.scanning.collectAsStateWithLifecycle()
+    val trashLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        if (r.resultCode == Activity.RESULT_OK) {
+            val n = verifiedFree.size
+            val bytes = verifiedFree.sumOf { it.size }
+            ActionLog.add("lixeira", "Moveu $n itens já conferidos no Telegram para a lixeira do celular", n, bytes)
+            freeMsg = "Pronto! ${fmtBytes(bytes)} foram para a lixeira (dá pra recuperar por uns 30 dias). Continuam na nuvem."
+            verifiedFree = emptyList()
+            scope.launch { DiscoverStore.refresh(ctx) }
+        } else freeMsg = "Nada foi apagado."
+        confirmFree = false
+    }
 
     fun save() {
         Prefs.folders = sel; Prefs.autoBackup = auto; Prefs.wifiOnly = wifi
@@ -94,6 +121,17 @@ fun BackupScreen(
         Backup.schedule(ctx)
     }
 
+    val life = LocalLifecycleOwner.current
+    DisposableEffect(life) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) scope.launch { DiscoverStore.refresh(ctx) }
+        }
+        life.lifecycle.addObserver(obs)
+        onDispose { life.lifecycle.removeObserver(obs) }
+    }
+    LaunchedEffect(sel, ver, running == null) {
+        if (running == null) scope.launch { DiscoverStore.refresh(ctx) }
+    }
     LaunchedEffect(ver, sel, running == null) {
         loading = true
         val data = withContext(Dispatchers.IO) {
@@ -174,13 +212,42 @@ fun BackupScreen(
                     else PillButton("Iniciar", Icons.Rounded.CloudUpload, { save(); Backup.runNow(ctx, true) }, Modifier.weight(1f), enabled = sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
                 }
                 Spacer(Modifier.height(8.dp))
-                TextButton({ MediaWatch.procurarNovosAgora(ctx) }, Modifier.fillMaxWidth(), enabled = sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (running != null) PillButton("Parar", Icons.Rounded.Stop, { Backup.stop(ctx); paused = true }, Modifier.weight(1f), filled = false)
+                }
+                TextButton({
+                    scope.launch { DiscoverStore.refresh(ctx) }
+                }, Modifier.fillMaxWidth(), enabled = !scanning && (sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())) {
                     Icon(Icons.Rounded.Search, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Procurar novos agora")
+                    Text(if (scanning) "Procurando…" else "Procurar novos agora")
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    TextButton(enabled = !scanning && (sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()), onClick = {
+                        scope.launch { DiscoverStore.refresh(ctx, biggestFirst = true) }
+                    }) { Text("Procurar os maiores") }
+                    TextButton(enabled = !scanning && (sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()), onClick = {
+                        scope.launch { DiscoverStore.refresh(ctx) }
+                    }) { Text("Procurar tudo") }
                 }
             }
         }
+        item(key = "discover") { DiscoverCards(
+            summary = summary,
+            scanning = scanning,
+            running = running != null,
+            onBackupAll = { list ->
+                if (list.isNotEmpty()) RestoreStore.priorityPaths = emptySet()
+                Backup.runNow(ctx, true)
+            },
+            onBackupBiggest = { list ->
+                RestoreStore.priorityPaths = list.sortedByDescending { it.size }.take(30).map { it.path }.toSet()
+                Backup.runNow(ctx, true)
+            },
+            onSeeNew = { onBrowseFolder(summary?.folders?.firstOrNull { it.newCount > 0 }?.folder ?: (Prefs.folders + Prefs.secretFolders).firstOrNull().orEmpty()) },
+            onFree = { confirmFree = true },
+            onSeeFree = { showFree = true },
+        ) }
         item(key = "batt") { SamsungBatteryCard() }
         item(key = "fail") { FailedUploadsCard() }
         item(key = "restq") { RestoreQueueCard() }
@@ -238,6 +305,46 @@ fun BackupScreen(
         }
     }
     if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = { onBrowseFolder(it) }, folders = folders)
+
+    if (confirmFree) AlertDialog(
+        onDismissRequest = { if (!verifyingFree) confirmFree = false },
+        title = { Text("Liberar espaço?") },
+        text = {
+            val s = summary
+            Column {
+                Text("${s?.freeableCount ?: 0} arquivos já salvos no Telegram (${fmtBytes(s?.freeableBytes ?: 0)}). Vão pra lixeira do celular, depois de conferir no Telegram. Dá pra recuperar por uns 30 dias.")
+                if (verifyingFree) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Conferindo ${verifyProg} de ${verifyTotal}…")
+                    LinearProgressIndicator({ if (verifyTotal <= 0) 0f else verifyProg / verifyTotal.toFloat() }, Modifier.fillMaxWidth())
+                }
+            }
+        },
+        confirmButton = {
+            Button(enabled = !verifyingFree && (summary?.freeableCount ?: 0) > 0, onClick = {
+                val chosen = summary?.freeable.orEmpty()
+                verifyingFree = true; verifyProg = 0; verifyTotal = chosen.size
+                scope.launch {
+                    val ok = try { Repo.verifyForDelete(chosen) { verifyProg = it } } catch (_: Exception) { emptyList() }
+                    verifiedFree = ok
+                    verifyingFree = false
+                    val skipped = chosen.size - ok.size
+                    if (ok.isEmpty()) {
+                        confirmFree = false
+                        freeMsg = if (skipped > 0) "Nenhum arquivo passou na conferência do Telegram. Nada foi apagado." else "Não achei arquivos pra liberar."
+                    } else {
+                        val intent = SafeTrash.intent(ctx, ok.map { it.uri })
+                        if (intent == null) {
+                            confirmFree = false
+                            freeMsg = "Não deu pra abrir a lixeira do sistema."
+                        } else trashLauncher.launch(IntentSenderRequest.Builder(intent).build())
+                    }
+                }
+            }) { Text("Sim") }
+        },
+        dismissButton = { TextButton(enabled = !verifyingFree, onClick = { confirmFree = false; showFree = true }) { Text("Ver") } },
+    )
+    freeMsg?.let { msg -> AlertDialog({ freeMsg = null }, confirmButton = { TextButton({ freeMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
     if (showDups) ModalBottomSheet({ showDups = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.testTag(FeatureTags.PANE_DUPLICADAS).padding(16.dp).navigationBarsPadding()) {
             Text("Duplicadas", style = MaterialTheme.typography.titleLarge)
@@ -247,7 +354,7 @@ fun BackupScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
-    if (showRestore) RestoreSheet(folders.filter { it.cloudCount > 0 }.map { it.name }, { showRestore = false })
+    if (showRestore) RestoreSheet({ showRestore = false })
 }
 
 @Composable
@@ -321,53 +428,67 @@ fun FailedUploadsCard() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
+private fun RestoreSheet(onClose: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    var albums by remember { mutableStateOf<List<DiscoverLogic.AlbumGroup>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf<String?>(null) }
     var msg by remember { mutableStateOf<String?>(null) }
-    var pending by remember { mutableStateOf<String?>(null) }
-    fun doRestore(name: String) {
-        busy = name
-        scope.launch {
-            try {
-                val items = br.geracaoai.nuvem.data.Db.allCloudMany(Prefs.galleryChats() + listOf(Prefs.secretChatId).filter { it != 0L }).filter { it.folder == name }
-                Restore.enqueue(ctx, items)
-                ActionLog.add("restaurar", "Fila de restauração: ${items.size} em ${folderLabel(name)}", items.size, 0)
-                msg = "Comecei a restaurar ${items.size} itens de ${folderLabel(name)}. Posso continuar em segundo plano."
-            } catch (e: Exception) {
-                msg = e.message ?: "Não deu pra começar a restauração."
-            }
-            busy = null
+    var pending by remember { mutableStateOf<DiscoverLogic.AlbumGroup?>(null) }
+    val q by RestoreStore.queue.collectAsStateWithLifecycle()
+    val pendingN = q.count { it.state == "pending" || it.state == "running" }
+    LaunchedEffect(Unit) {
+        loading = true
+        albums = withContext(Dispatchers.IO) {
+            DiscoverLogic.groupAlbums(Db.allCloudMany(Prefs.galleryChats()))
         }
+        loading = false
+    }
+    fun doRestore(g: DiscoverLogic.AlbumGroup) {
+        busy = g.name
+        Restore.enqueue(ctx, g.items)
+        ActionLog.add("restaurar", "Fila de restauração: ${g.count} em ${folderLabel(g.name)}", g.count, 0)
+        msg = "Comecei a restaurar ${g.count} itens de ${folderLabel(g.name)}. Posso continuar em segundo plano."
+        busy = null
     }
     ModalBottomSheet(onClose) {
-        Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+        Column(Modifier.padding(20.dp).navigationBarsPadding().heightIn(max = 640.dp)) {
             Text("Restaurar álbum", style = MaterialTheme.typography.titleLarge, modifier = Modifier.testTag(FeatureTags.PANE_RESTAURAR))
-            Text("Baixa o álbum de volta para a pasta original do celular.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(12.dp))
-            if (albums.isEmpty()) Text("Nada na nuvem ainda.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            albums.forEach { name ->
-                ListItem(
-                    headlineContent = { Text(folderLabel(name)) },
-                    trailingContent = { TextButton(enabled = busy == null, onClick = { pending = name }) { Text(if (busy == name) "Restaurando…" else "Restaurar") } },
-                    modifier = Modifier.clip(RoundedCornerShape(12.dp))
-                )
+            Text("Todas as pastas que já têm backup no Telegram, mesmo se o arquivo saiu do celular.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            if (pendingN > 0) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("$pendingN na fila", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    TextButton({ Restore.cancel(ctx); msg = "Restauração cancelada." }) { Text("Cancelar") }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            else if (albums.isEmpty()) Text("Nada na nuvem ainda.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else androidx.compose.foundation.lazy.LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f, fill = false)) {
+                itemsIndexed(albums, key = { _, g -> g.name }) { _, g ->
+                    ListItem(
+                        headlineContent = { Text(folderLabel(g.name)) },
+                        supportingContent = { Text("${g.count} ${if (g.count == 1) "item" else "itens"} • ${fmtBytes(g.bytes)}") },
+                        trailingContent = { TextButton(enabled = busy == null, onClick = { pending = g }) { Text(if (busy == g.name) "Restaurando…" else "Restaurar") } },
+                        modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                    )
+                }
             }
             msg?.let { Text(it, color = Nv.Cyan, style = MaterialTheme.typography.bodySmall) }
             Spacer(Modifier.height(12.dp))
         }
     }
-    val name = pending
-    if (name != null) AlertDialog(
+    val g = pending
+    if (g != null) AlertDialog(
         { pending = null },
-        title = { Text("Restaurar ${folderLabel(name)}?") },
-        text = { Text("Os arquivos voltam para a pasta original do celular. Nada é apagado da nuvem.") },
-        confirmButton = { Button({ pending = null; doRestore(name) }) { Text("Restaurar") } },
+        title = { Text("Restaurar ${folderLabel(g.name)}?") },
+        text = { Text("${g.count} arquivos voltam para a pasta original. Nada é apagado da nuvem.") },
+        confirmButton = { Button({ pending = null; doRestore(g) }) { Text("Restaurar") } },
         dismissButton = { TextButton({ pending = null }) { Text("Cancelar") } },
     )
 }
-
 
 @Composable
 fun HomeShortcutRow(
@@ -431,6 +552,68 @@ fun RestoreQueueCard() {
                 if (failed > 0) RestoreStore.save(q.map { if (it.state == "failed") it.copy(state = "pending", attempts = 0) else it })
                 Restore.start(ctx)
             })
+            if (pending > 0) PillButton("Cancelar", Icons.Rounded.Close, { Restore.cancel(ctx) }, filled = false)
         }
+    }
+}
+
+@Composable
+fun DiscoverCards(
+    summary: DiscoverSummary?,
+    scanning: Boolean,
+    running: Boolean,
+    onBackupAll: (List<LocalItem>) -> Unit,
+    onBackupBiggest: (List<LocalItem>) -> Unit,
+    onSeeNew: () -> Unit,
+    onFree: () -> Unit,
+    onSeeFree: () -> Unit,
+) {
+    if (scanning && summary == null) {
+        GlassCard(radius = 24.dp, padding = 16.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(12.dp))
+                Text("Procurando arquivos nas pastas…", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        return
+    }
+    val s = summary ?: return
+    if (s.error.isNotBlank() && s.newCount == 0 && s.freeableCount == 0) {
+        GlassCard(radius = 24.dp, padding = 16.dp) { Text(s.error, color = Nv.Rose, style = MaterialTheme.typography.bodyMedium) }
+        Spacer(Modifier.height(8.dp))
+        return
+    }
+    if (s.newCount > 0 && !running) {
+        GlassCard(radius = 24.dp, padding = 16.dp) {
+            Text("${s.newCount} arquivos novos encontrados (${fmtBytes(s.newBytes)}). Fazer backup de todos?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton("Sim", Icons.Rounded.CloudUpload, { onBackupAll(s.newFiles) }, Modifier.weight(1f))
+                PillButton("Ver", Icons.Rounded.FolderOpen, onSeeNew, Modifier.weight(1f), filled = false)
+            }
+            TextButton({ onBackupBiggest(s.newFiles) }, Modifier.fillMaxWidth()) { Text("Enviar os maiores primeiro") }
+        }
+        Spacer(Modifier.height(8.dp))
+    } else if (scanning) {
+        GlassCard(radius = 24.dp, padding = 16.dp) {
+            Text("Procurando…", style = MaterialTheme.typography.bodyMedium)
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+    if (s.freeableCount > 0 && !running) {
+        GlassCard(radius = 24.dp, padding = 16.dp) {
+            Text("${s.freeableCount} arquivos já salvos no Telegram encontrados (${fmtBytes(s.freeableBytes)}). Liberar espaço?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton("Sim", Icons.Rounded.CleaningServices, onFree, Modifier.weight(1f))
+                PillButton("Ver", Icons.Rounded.FolderOpen, onSeeFree, Modifier.weight(1f), filled = false)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+    s.folders.firstOrNull { it.note.isNotBlank() }?.let { d ->
+        Text(d.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
     }
 }

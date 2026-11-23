@@ -88,6 +88,9 @@ object RestoreLogic {
             }
         }
 
+    /** Mantém só o que já restaurou; tira pendentes, em andamento e falhas. */
+    fun cancelQueue(list: List<Task>): List<Task> = list.filter { it.state == "done" }
+
     fun pendingCount(list: List<Task>) = list.count { it.state == "pending" || it.state == "running" }
     fun doneCount(list: List<Task>) = list.count { it.state == "done" }
     fun failedCount(list: List<Task>) = list.count { it.state == "failed" }

@@ -75,7 +75,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
         loading = true
         all = withContext(Dispatchers.IO) {
             Db.allCloudMany(Prefs.galleryChats()).filter {
-                (showing == null || it.folder == showing) && (!videosOnly || it.isVideo)
+                (showing == null || DiscoverLogic.normalizeAlbum(it.folder, it.path) == showing) && (!videosOnly || it.isVideo)
             }
         }
         loading = false
@@ -87,7 +87,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
             all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() }
         }
     }
-    val albums = remember(items) { items.groupBy { it.folder.ifBlank { "Sem pasta" } }.toList().sortedByDescending { it.second.maxOfOrNull { c -> c.taken } ?: 0L } }
+    val albums = remember(items) { DiscoverLogic.groupAlbums(items).map { it.name to it } }
     val daySections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
     val selecting = selected.isNotEmpty()
     val folderGrid = showing == null && !videosOnly && query.isBlank()
@@ -141,11 +141,11 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
             } else if (folderGrid) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpEntry(onBrowseFolder) }
                 item(span = { GridItemSpan(maxLineSpan) }, key = "secret") { SecretAlbumsEntry(onOpen) }
-                items(albums, key = { "al${it.first}" }) { (album, albumItems) ->
+                items(albums, key = { "al${it.first}" }) { (album, g) ->
                     GlassCard(Modifier.animateItem(), onClick = { innerFolder = album }, radius = 20.dp, padding = 8.dp) {
-                        Thumb(albumItems.first(), Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)))
+                        Thumb(g.items.first(), Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(14.dp)))
                         Text(folderLabel(album), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp))
-                        Text("${albumItems.size} itens", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                        Text("${g.count} ${if (g.count == 1) "item" else "itens"} • ${fmtBytes(g.bytes)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
                     }
                 }
             } else {

@@ -246,7 +246,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val folderCache = HashMap<String, List<LocalItem>>()
         fun loadFolder(name: String): List<LocalItem> = folderCache.getOrPut(name) {
             val prio = RestoreStore.priorityPaths
-            val items = LocalMedia.scanAndWalk(applicationContext, name).filter { it.size in 1..max && File(it.path).canRead() }
+            val items = LocalMedia.scanAndWalk(applicationContext, name).filter { it.size in 1..max && (File(it.path).canRead() || it.mediaId > 0 || AllFilesAccess.granted()) }
             if (prio.isEmpty()) items
             else items.sortedWith(compareBy<LocalItem> { if (it.path in prio) 0 else 1 }.thenBy { it.taken }.thenBy { it.mediaId })
         }

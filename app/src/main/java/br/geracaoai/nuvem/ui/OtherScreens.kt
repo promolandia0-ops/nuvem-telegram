@@ -3,6 +3,8 @@ package br.geracaoai.nuvem.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.*
@@ -99,6 +101,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
     var destConfirm by remember { mutableStateOf(false) }
     var destResend by remember { mutableStateOf(false) }
     var showFree by remember { mutableStateOf(false) }
+    var showDiag by remember { mutableStateOf(false) }
     val premium by Td.isPremium.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         try {
@@ -146,6 +149,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
                 SettingsLine(Icons.Rounded.CleaningServices, "Liberar espaço", "Arquivos já no Telegram vão para a lixeira do celular", tag = FeatureTags.SETTINGS_LIBERAR) { showFree = true }
                 Column(Modifier.testTag(FeatureTags.SETTINGS_DUPLICADAS)) { DupCleanRow() }
                 SecretSettingsRow()
+                SettingsLine(Icons.Rounded.Info, "Diagnóstico de pastas", "Arquivos no disco, no Telegram e arquivos novos") { showDiag = true }
                 SettingsLine(Icons.Rounded.Sync, "Reindexar nuvem", if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)", enabled = !syncing, tag = FeatureTags.SETTINGS_REINDEXAR) {
                     syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false }
                 }
@@ -158,9 +162,10 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
                 SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.", tag = FeatureTags.SETTINGS_SAIR) { confirmOut = true }
             }
         }
-        item { Text("Nuvem 1.7.0 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
+        item { Text("Nuvem 1.7.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
     }
     if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = onBrowseFolder)
+    if (showDiag) FolderDiagSheet({ showDiag = false })
     if (destConfirm) AlertDialog(
         { destConfirm = false },
         title = { Text("Trocar destino?") },
@@ -359,5 +364,55 @@ fun DupCleanRow() {
             },
             dismissButton = { TextButton({ confirm = false }) { Text("Cancelar") } }
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FolderDiagSheet(onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val summary by DiscoverStore.summary.collectAsStateWithLifecycle()
+    val scanning by DiscoverStore.scanning.collectAsStateWithLifecycle()
+    val access = AllFilesAccess.granted()
+    val pickFor = remember { mutableStateOf<String?>(null) }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val b = pickFor.value
+        if (uri != null && b != null) {
+            FolderAccess.takeTree(ctx, uri, b)
+            scope.launch { DiscoverStore.refresh(ctx) }
+        }
+    }
+    LaunchedEffect(Unit) { if (summary == null) DiscoverStore.refresh(ctx) }
+    ModalBottomSheet(onClose) {
+        Column(Modifier.padding(20.dp).navigationBarsPadding().heightIn(max = 640.dp)) {
+            Text("Diagnóstico de pastas", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text(if (access) "Acesso a todos os arquivos: ligado." else "Sem acesso total. Pastas com .nomedia ou fora da galeria podem ficar invisíveis.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!access) {
+                Spacer(Modifier.height(8.dp))
+                Button({ ctx.startActivity(AllFilesAccess.intent(ctx).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }, Modifier.fillMaxWidth()) { Text("Liberar acesso a todos os arquivos") }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+            val list = summary?.folders.orEmpty()
+            if (list.isEmpty() && !scanning) Text("Nenhuma pasta de backup selecionada no Início.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                for (d in list) {
+                    GlassCard(radius = 18.dp, padding = 12.dp) {
+                        Text(folderLabel(d.folder), fontWeight = FontWeight.SemiBold)
+                        if (d.paths.isNotEmpty()) Text(d.paths.joinToString("\n"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        else Text("Caminho não encontrado no disco.", style = MaterialTheme.typography.bodySmall, color = Nv.Rose)
+                        Text("No disco: ${d.diskCount} (${fmtBytes(d.diskBytes)}) • no Telegram: ${d.cloudCount} • novos: ${d.newCount} (${fmtBytes(d.newBytes)})", style = MaterialTheme.typography.bodySmall)
+                        if (d.hasNomedia) Text("Tem .nomedia (a galeria do Android esconde, o app lê no disco).", style = MaterialTheme.typography.labelSmall)
+                        if (d.unreadable > 0) Text("${d.unreadable} sem permissão de leitura.", style = MaterialTheme.typography.labelSmall, color = Nv.Rose)
+                        if (d.note.isNotBlank()) Text(d.note, style = MaterialTheme.typography.bodySmall)
+                        TextButton({ pickFor.value = d.folder; pick.launch(null) }) { Text("Apontar pasta no disco") }
+                    }
+                }
+            }
+            Text("Se a pasta segura for a do Samsung (perfil separado), este app no perfil principal não consegue ler. Use uma pasta normal e aponte ela aqui.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            Spacer(Modifier.height(16.dp))
+        }
     }
 }

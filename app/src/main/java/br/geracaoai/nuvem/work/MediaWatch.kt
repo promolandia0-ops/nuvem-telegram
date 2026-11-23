@@ -73,15 +73,13 @@ object MediaWatch {
         val app = c.applicationContext
         Thread {
             try {
-                val folders = Prefs.folders + Prefs.secretFolders
-                val paths = ArrayList<String>()
-                for (b in folders) {
-                    for (d in LocalMedia.folderDirs(b)) paths += d.absolutePath
-                    LocalMedia.scanAndWalk(app, b)
-                }
-                if (paths.isNotEmpty()) LocalMedia.requestScan(app, paths)
-            } catch (_: Exception) {}
-            h.post { Backup.runNow(app, ignoreConstraints = true, expedited = true) }
+                kotlinx.coroutines.runBlocking { br.geracaoai.nuvem.data.DiscoverStore.refresh(app) }
+            } catch (_: Exception) {
+                try {
+                    val folders = Prefs.folders + Prefs.secretFolders
+                    for (b in folders) LocalMedia.scanAndWalk(app, b)
+                } catch (_: Exception) {}
+            }
         }.start()
     }
 }

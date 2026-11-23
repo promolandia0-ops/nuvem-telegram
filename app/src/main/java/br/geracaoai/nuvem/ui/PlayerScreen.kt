@@ -153,6 +153,7 @@ fun VideoPlayer(
     var bgAudio by remember { mutableStateOf(PlayerHolder.backgroundAudio) }
     var brightness by remember { mutableFloatStateOf(act?.window?.attributes?.screenBrightness?.takeIf { it >= 0 } ?: 0.5f) }
     var seekPreview by remember { mutableStateOf<Long?>(null) }
+    var endedTick by remember { mutableStateOf(false) }
 
     val player = remember(src?.fileId, retry) {
         val s = src ?: return@remember null
@@ -180,6 +181,7 @@ fun VideoPlayer(
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
                 ready = state == Player.STATE_READY || state == Player.STATE_ENDED
+                if (state == Player.STATE_ENDED) endedTick = true
                 if (state == Player.STATE_READY && p != null) {
                     val d = p.duration.coerceAtLeast(0)
                     dur = d
@@ -227,6 +229,11 @@ fun VideoPlayer(
     LaunchedEffect(orient, vsize.width, vsize.height, vsize.unappliedRotationDegrees) {
         val pais = Orientacao.ehPaisagem(vsize.width, vsize.height, vsize.unappliedRotationDegrees)
         act?.aplicarOrientacao(orientacaoCodigo(orient, pais))
+    }
+    LaunchedEffect(endedTick, loop, nextIdx, index) {
+        if (!endedTick) return@LaunchedEffect
+        endedTick = false
+        if (loop == ModoRepeticao.DESLIGADO && nextIdx != null) onIndex(nextIdx!!)
     }
     LaunchedEffect(player, loop, pontoA, pontoB) {
         val p = player ?: return@LaunchedEffect

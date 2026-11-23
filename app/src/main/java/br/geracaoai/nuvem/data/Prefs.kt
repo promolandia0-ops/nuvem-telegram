@@ -33,7 +33,7 @@ object Prefs {
     var secretFolders: Set<String> get() = p.getStringSet("secret_folders", emptySet())!!; set(v) = p.edit().putStringSet("secret_folders", v).apply()
     var secretPinHash: String get() = p.getString("secret_pin", "")!!; set(v) = p.edit().putString("secret_pin", v).apply()
     var topicMap: String get() = p.getString("topic_map", "")!!; set(v) = p.edit().putString("topic_map", v).apply()
-    fun galleryChats(): List<Long> = listOf(chatId, legacyChatId).filter { it != 0L }.distinct()
+    fun galleryChats(): List<Long> = allKnownChats()
     fun indexId(chat: Long): Long {
         try {
             val j = JSONObject(p.getString("index_map", "") ?: "")

@@ -93,17 +93,25 @@ object LocalMedia {
         val roots = folderDirs(bucket)
         val disk = ArrayList<ListedFile>()
         for (dir in roots) disk += walkDir(dir, bucket)
-        val foundPaths = disk.map { it.path }.filter { p -> store.none { it.path == p } }
+        for (u in FolderTrees.uris(bucket)) {
+            try { disk += FolderAccess.walkSaf(c, android.net.Uri.parse(u), bucket) } catch (_: Exception) {}
+        }
+        val foundPaths = disk.map { it.path }.filter { p -> p.startsWith("/") && store.none { it.path == p } }
         if (foundPaths.isNotEmpty()) requestScan(c, foundPaths)
         val after = if (foundPaths.isNotEmpty()) queryForFolder(c, bucket) else store
         rememberRootsFrom(after)
+        val more = BackupDiff.rememberRelPaths(disk)
+        if (more.isNotEmpty()) FolderRoots.add(more)
         val storeListed = after.map { it.toListed() }
         val merged = BackupDiff.mergeListings(storeListed, disk)
         val byPath = after.associateBy { BackupDiff.normalizePath(it.path) }
         return merged.map { lf ->
             byPath[BackupDiff.normalizePath(lf.path)]?.copy(durationMs = lf.durationMs.takeIf { it > 0 } ?: 0)
                 ?: lf.toLocalItem()
-        }.filter { File(it.path).isFile && File(it.path).canRead() }
+        }.filter { item ->
+            val f = File(item.path)
+            f.isFile && (f.canRead() || item.mediaId > 0 || AllFilesAccess.granted())
+        }
     }
 
     fun queryForFolder(c: Context, bucket: String): List<LocalItem> {
@@ -153,6 +161,15 @@ object LocalMedia {
             val d = File(root, rel.trim('/'))
             if (d.isDirectory) out += d
         }
+        // caminho absoluto gravado em FolderRoots (às vezes vem completo)
+        for (rel in FolderRoots.forBucket(bucket)) {
+            val raw = rel.trim().trim('/')
+            if (raw.startsWith("storage/") || raw.startsWith("/")) {
+                val f = File("/" + raw.trimStart('/'))
+                if (f.isDirectory) out += f
+            }
+        }
+        try { FolderAccess.findDirsNamed(bucket).forEach { if (it.isDirectory) out += it } } catch (_: Exception) {}
         return out.toList()
     }
 
@@ -165,6 +182,7 @@ object LocalMedia {
 
     fun walkDir(dir: File, bucket: String): List<ListedFile> {
         val out = ArrayList<ListedFile>()
+        if (!dir.isDirectory) return out
         val stack = ArrayDeque<File>()
         stack.add(dir)
         var n = 0
@@ -173,13 +191,17 @@ object LocalMedia {
             val list = try { d.listFiles() } catch (_: Exception) { null } ?: continue
             for (f in list) {
                 if (f.isDirectory) {
-                    val name = f.name
-                    if (name.startsWith(".") || name.equals("Android", true)) continue
+                    val root = d == dir
+                    if (!DiscoverLogic.shouldEnterChild(d.name, f.name, isWalkRoot = root && f == dir)) {
+                        if (!DiscoverLogic.shouldEnterDir(f.name, isWalkRoot = false)) continue
+                    }
+                    if (!DiscoverLogic.shouldEnterChild(d.name, f.name)) continue
                     stack.addLast(f)
                 } else if (f.isFile && BackupDiff.isMediaFile(f.name)) {
                     val mime = if (f.name.lowercase().let { it.endsWith(".mp4") || it.endsWith(".mkv") || it.endsWith(".mov") || it.endsWith(".webm") || it.endsWith(".m4v") || it.endsWith(".3gp") }) "video/mp4" else "image/jpeg"
                     val rel = relFromAbsolute(f.absolutePath)
-                    out += ListedFile(f.absolutePath, f.name, f.length(), f.lastModified(), mime, bucket, rel, f.canRead(), 0, f.lastModified())
+                    val readable = try { f.canRead() && f.length() >= 0L } catch (_: Exception) { false }
+                    out += ListedFile(f.absolutePath, f.name, f.length(), f.lastModified(), mime, bucket, rel, readable || f.exists(), 0, f.lastModified())
                     n++
                 }
             }

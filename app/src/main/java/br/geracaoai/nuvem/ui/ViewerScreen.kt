@@ -37,16 +37,24 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
     val pager = rememberPagerState(start) { items.size }
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    var idx by remember { mutableIntStateOf(start) }
     var chrome by remember { mutableStateOf(true) }
     var confirmDel by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
-    val cur = items.getOrNull(pager.currentPage)
+    val cur = items.getOrNull(idx)
     val curIsVideo = cur?.isVideo == true
+    fun goTo(i: Int) {
+        if (i !in items.indices) return
+        idx = i
+        if (items[i].isVideo.not()) scope.launch { try { pager.scrollToPage(i) } catch (_: Exception) {} }
+    }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (curIsVideo && cur != null) {
-            VideoPlayer(items, pager.currentPage, { i -> scope.launch { pager.scrollToPage(i) } }, onClose)
+            VideoPlayer(items, idx, { i -> goTo(i) }, onClose)
         } else {
+        androidx.compose.runtime.LaunchedEffect(idx) { if (items.getOrNull(idx)?.isVideo != true && pager.currentPage != idx) try { pager.scrollToPage(idx) } catch (_: Exception) {} }
+        androidx.compose.runtime.LaunchedEffect(pager.currentPage) { if (items.getOrNull(pager.currentPage)?.isVideo != true) idx = pager.currentPage }
         HorizontalPager(pager, Modifier.fillMaxSize(), key = { items[it].msgId }) { p ->
             val ci = items[p]
             Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { chrome = !chrome }, contentAlignment = Alignment.Center) {

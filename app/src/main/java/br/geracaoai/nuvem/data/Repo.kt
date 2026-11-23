@@ -1060,6 +1060,10 @@ object Repo {
         val deadline = System.currentTimeMillis() + 30L * 60_000
         var lastErr: Exception? = null
         while (System.currentTimeMillis() < deadline) {
+            if (br.geracaoai.nuvem.work.Restore.cancelled) {
+                try { Td.send(TdApi.CancelDownloadFile(f0.id, false), 5_000) } catch (_: Exception) {}
+                return@withContext null
+            }
             try {
                 val f = Td.send(TdApi.GetFile(f0.id), 15_000)
                 val loc = f.local
@@ -1083,6 +1087,7 @@ object Repo {
 
     /** Restaura para a pasta original, se der; senão Pictures/Movies/Restaurados/álbum. */
     suspend fun restore(c: Context, ci: CloudItem, onProgress: ((Float) -> Unit)? = null): Boolean = withContext(Dispatchers.IO) {
+        if (br.geracaoai.nuvem.work.Restore.cancelled) return@withContext false
         val src = downloadOriginal(ci, onProgress) ?: fullPath(ci) ?: return@withContext false
         val srcFile = File(src)
         if (!srcFile.isFile) return@withContext false
