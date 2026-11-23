@@ -47,6 +47,8 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.work.Backup
+import br.geracaoai.nuvem.work.Restore
+import br.geracaoai.nuvem.work.MediaWatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -116,9 +118,17 @@ fun FolderBrowseBody(
     var verifyingCount by remember { mutableIntStateOf(0) }
     var verified by remember { mutableStateOf<List<LocalItem>>(emptyList()) }
     var result by remember { mutableStateOf<String?>(null) }
-    val shown = remember(items, filter) { FolderMedia.applyFilter(items, filter) }
+    var typeFilter by remember { mutableStateOf(FolderTypeFilter.ALL) }
+    var sort by remember { mutableStateOf(FolderSort.DATE) }
+    val shown = remember(items, filter, typeFilter, sort) {
+        FolderMedia.applySort(FolderMedia.applyType(FolderMedia.applyFilter(items, filter), typeFilter), sort)
+    }
     val selectable = remember(shown) { FolderMedia.selectableIds(shown) }
+    val restoreable = remember(shown) { FolderMedia.restoreIds(shown) }
     val (selCount, selBytes) = remember(shown, selected) { FolderMedia.summary(shown, selected) }
+    val restoreSel = remember(shown, selected) { shown.filter { it.id in selected && it.kind == FolderItemKind.CLOUD_ONLY }.mapNotNull { it.cloud } }
+    val pendingBig = remember(shown) { shown.filter { it.kind == FolderItemKind.LOCAL_PENDING }.sortedByDescending { it.size } }
+    val folderBytes = remember(items) { items.filter { it.kind != FolderItemKind.CLOUD_ONLY }.sumOf { it.size } }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         if (r.resultCode == Activity.RESULT_OK) {
             val bytes = verified.sumOf { it.size }
@@ -156,7 +166,12 @@ fun FolderBrowseBody(
                 Text(folderLabel(folder), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val nLocal = items.count { it.kind != FolderItemKind.CLOUD_ONLY }
                 val nCloud = items.count { it.kind == FolderItemKind.CLOUD_ONLY }
-                Text("$nLocal no aparelho • $nCloud só na nuvem", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("$nLocal no aparelho • $nCloud só na nuvem • ${fmtBytes(folderBytes)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (restoreable.isNotEmpty()) {
+                TextButton({
+                    Restore.enqueue(ctx, shown.mapNotNull { if (it.kind == FolderItemKind.CLOUD_ONLY) it.cloud else null })
+                }) { Text("Restaurar pasta") }
             }
         }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -164,14 +179,28 @@ fun FolderBrowseBody(
             FilterChip(filter == FolderMediaFilter.ON_DEVICE, { filter = FolderMediaFilter.ON_DEVICE }, { Text("No aparelho") }, modifier = Modifier.testTag(FeatureTags.FILTER_APARELHO))
             FilterChip(filter == FolderMediaFilter.CLOUD_ONLY, { filter = FolderMediaFilter.CLOUD_ONLY }, { Text("Só na nuvem") }, modifier = Modifier.testTag(FeatureTags.FILTER_NUVEM))
         }
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(typeFilter == FolderTypeFilter.ALL, { typeFilter = FolderTypeFilter.ALL }, { Text("Tudo") })
+            FilterChip(typeFilter == FolderTypeFilter.VIDEOS, { typeFilter = FolderTypeFilter.VIDEOS }, { Text("Vídeos") })
+            FilterChip(typeFilter == FolderTypeFilter.PHOTOS, { typeFilter = FolderTypeFilter.PHOTOS }, { Text("Fotos") })
+            FilterChip(sort == FolderSort.SIZE, { sort = if (sort == FolderSort.SIZE) FolderSort.DATE else FolderSort.SIZE }, { Text("Maiores") })
+        }
         Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton({ selected = FolderMedia.selectAll(shown) }, enabled = selectable.isNotEmpty(), modifier = Modifier.testTag(FeatureTags.BTN_SELECIONAR_TODOS)) { Text("Selecionar todos") }
+            TextButton({
+                selected = if (filter == FolderMediaFilter.CLOUD_ONLY) FolderMedia.restoreIds(shown) else FolderMedia.selectAll(shown)
+            }, enabled = selectable.isNotEmpty() || restoreable.isNotEmpty(), modifier = Modifier.testTag(FeatureTags.BTN_SELECIONAR_TODOS)) { Text("Selecionar todos") }
             TextButton({ selected = FolderMedia.deselectAll() }, enabled = selected.isNotEmpty(), modifier = Modifier.testTag(FeatureTags.BTN_DESMARCAR_TODOS)) { Text("Desmarcar todos") }
+            if (pendingBig.isNotEmpty()) {
+                TextButton({
+                    RestoreStore.priorityPaths = pendingBig.take(20).mapNotNull { it.local?.path }.toSet()
+                    Backup.runNow(ctx, true)
+                }) { Text("Enviar os maiores") }
+            }
         }
         LazyVerticalGrid(
             GridCells.Adaptive(104.dp),
-            Modifier.weight(1f),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (selectable.isNotEmpty()) 168.dp else 24.dp),
+            Modifier.weight(1f).testTag(FeatureTags.GRID_PASTA),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (selectable.isNotEmpty() || selected.isNotEmpty()) 176.dp else 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -190,35 +219,49 @@ fun FolderBrowseBody(
                         item = item,
                         selected = item.id in selected,
                         onClick = {
-                            if (item.kind == FolderItemKind.CLOUD_ONLY) {
+                            if (item.kind == FolderItemKind.CLOUD_ONLY && selected.isEmpty() && filter != FolderMediaFilter.CLOUD_ONLY) {
                                 val openable = shown.mapNotNull { it.cloud }
                                 val ci = item.cloud ?: return@FolderMediaCell
                                 val idx = openable.indexOfFirst { it.chatId == ci.chatId && it.msgId == ci.msgId }.coerceAtLeast(0)
                                 onOpenCloud(openable, idx)
                             } else {
-                                selected = FolderMedia.toggle(selected, item.id, shown)
+                                selected = FolderMedia.toggleAny(selected, item.id, shown)
                             }
                         },
                     )
                 }
             }
         }
-        if (selectable.isNotEmpty()) {
+        if (selectable.isNotEmpty() || selected.isNotEmpty() || restoreable.isNotEmpty() && filter == FolderMediaFilter.CLOUD_ONLY) {
             Surface(Modifier.fillMaxWidth(), color = Color(0xE6151C33), shadowElevation = 8.dp) {
                 Row(
                     Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(if (selCount == 0) "Nenhum selecionado" else "$selCount ${if (selCount == 1) "item" else "itens"} • ${fmtBytes(selBytes)}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Color.White)
-                        Text("Só o que já está no Telegram. Vai pra lixeira do celular.", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(0.7f))
+                        val nRest = restoreSel.size
+                        Text(
+                            when {
+                                selCount == 0 && nRest == 0 -> "Nenhum selecionado"
+                                nRest > 0 && selCount > 0 -> "$selCount p/ liberar • $nRest p/ restaurar"
+                                nRest > 0 -> "$nRest ${if (nRest == 1) "item" else "itens"} na nuvem"
+                                else -> "$selCount ${if (selCount == 1) "item" else "itens"} • ${fmtBytes(selBytes)}"
+                            },
+                            style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Color.White,
+                        )
+                        Text(if (nRest > 0) "Restaura na pasta original, ou em Restaurados." else "Só o que já está no Telegram. Vai pra lixeira do celular.", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(0.7f))
                     }
-                    Button(
-                        onClick = { startLiberar() },
-                        enabled = selCount > 0 && !running,
-                        modifier = Modifier.testTag(FeatureTags.BTN_LIBERAR_PASTA),
-                    ) { Text("Liberar espaço") }
+                    if (restoreSel.isNotEmpty()) {
+                        Button(onClick = { Restore.enqueue(ctx, restoreSel); selected = FolderMedia.deselectAll() }) { Text("Restaurar") }
+                    }
+                    if (selCount > 0 || selectable.isNotEmpty()) {
+                        Button(
+                            onClick = { startLiberar() },
+                            enabled = selCount > 0 && !running,
+                            modifier = Modifier.testTag(FeatureTags.BTN_LIBERAR_PASTA),
+                        ) { Text("Liberar espaço") }
+                    }
                 }
             }
         }
@@ -281,7 +324,24 @@ private fun FolderMediaCell(item: FolderMediaItem, selected: Boolean, onClick: (
                 Icon(if (item.isVideo) Icons.Rounded.Movie else Icons.Rounded.Image, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (item.kind == FolderItemKind.LOCAL_PENDING) {
+        if (item.kind != FolderItemKind.LOCAL_PENDING) Text(
+            fmtBytes(item.size),
+            modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).clip(RoundedCornerShape(8.dp)).background(Color(0x99000000)).padding(horizontal = 5.dp, vertical = 2.dp),
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        if (item.kind == FolderItemKind.CLOUD_ONLY && item.cloud != null && RestoreStore.isRestored(item.cloud.chatId, item.cloud.msgId)) {
+            Text(
+                "restaurado",
+                modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xCC0B1224)).padding(horizontal = 6.dp, vertical = 2.dp),
+                color = Nv.Cyan,
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
+        } else if (item.kind == FolderItemKind.LOCAL_PENDING) {
             Text(
                 "não salvo",
                 modifier = Modifier.align(Alignment.BottomStart).padding(5.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xCC1A1020)).padding(horizontal = 6.dp, vertical = 2.dp),
@@ -379,7 +439,7 @@ fun FreeFoldersBody(
     Column(modifier) {
         Text("Liberar espaço", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
-        Text("Abra uma pasta com backup pra revisar o que apagar. Só sai do celular o que já está no Telegram, e vai pra lixeira (dá pra recuperar por uns 30 dias).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Abra uma pasta com backup pra revisar o que apagar. Nas pastas dá pra ordenar pelos maiores, ver tamanho e restaurar o que está só na nuvem. Só sai do celular o que já está no Telegram, e vai pra lixeira (dá pra recuperar por uns 30 dias).", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
         when {
             loading && folders.isEmpty() -> {
@@ -391,7 +451,7 @@ fun FreeFoldersBody(
             }
             folders.isEmpty() -> Text("Nenhuma pasta com backup ainda. Escolha pastas no Início e toque em Iniciar.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                folders.forEach { f ->
+                folders.sortedByDescending { it.localBytes }.forEach { f ->
                     BackupFolderCard(
                         f,
                         Modifier.testTag(FeatureTags.liberarPastaTag(f.name)),

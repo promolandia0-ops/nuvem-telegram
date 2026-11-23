@@ -15,6 +15,7 @@ object FeatureTags {
     const val FILTER_TODOS = "filter_todos"
     const val FILTER_APARELHO = "filter_no_aparelho"
     const val FILTER_NUVEM = "filter_so_nuvem"
+    const val GRID_PASTA = "grid_pasta"
     fun liberarPastaTag(name: String) = "liberar_pasta_$name"
     const val PANE_DUPLICADAS = "pane_duplicadas"
     const val PANE_RESTAURAR = "pane_restaurar"

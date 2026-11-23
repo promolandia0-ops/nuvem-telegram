@@ -1049,49 +1049,79 @@ object Repo {
         if (orig != null) Db.deleteCloud(orig.chatId, orig.msgId)
     }
 
-    fun restoreRelativePath(ci: CloudItem): String {
-        val fromMeta = ci.path.substringBeforeLast('/').trim('/').ifBlank { "" }
-        if (fromMeta.isNotBlank() && !fromMeta.startsWith("/")) return fromMeta + "/"
-        val base = if (ci.isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
-        return "$base/Nuvem/${ci.folder.ifBlank { "Outros" }}/"
+    fun restoreRelativePath(ci: CloudItem): String = RestoreLogic.mediaRelativePath(ci.path, ci.folder, ci.isVideo)
+
+    /** Baixa o arquivo completo do Telegram (com espera de verdade) e devolve o caminho local. */
+    suspend fun downloadOriginal(ci: CloudItem, onProgress: ((Float) -> Unit)? = null): String? = withContext(Dispatchers.IO) {
+        val src = originalItem(ci) ?: ci
+        val msg = try { message(src) } catch (_: Exception) { return@withContext null }
+        val f0 = fileOf(msg) ?: return@withContext null
+        try { Td.send(TdApi.DownloadFile(f0.id, 32, 0, 0, false), 20_000) } catch (_: Exception) {}
+        val deadline = System.currentTimeMillis() + 30L * 60_000
+        var lastErr: Exception? = null
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val f = Td.send(TdApi.GetFile(f0.id), 15_000)
+                val loc = f.local
+                val path = loc?.path ?: ""
+                val size = PlaybackFile.resolvedSize(f.size, f.expectedSize, src.size).coerceAtLeast(1L)
+                val got = loc?.downloadedSize ?: 0
+                onProgress?.invoke((got.toFloat() / size).coerceIn(0f, 1f))
+                if (loc?.isDownloadingCompleted == true && path.isNotBlank() && File(path).isFile && File(path).length() > 0L) {
+                    return@withContext path
+                }
+                if (loc?.isDownloadingActive != true) {
+                    try { Td.send(TdApi.DownloadFile(f0.id, 32, got.coerceAtLeast(0), 0, false), 15_000) } catch (e: Exception) { lastErr = e }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { lastErr = e }
+            delay(600)
+        }
+        lastErr?.let { } 
+        null
     }
 
-    /** Restaura para a pasta original, se soubermos; senão Pictures/Movies/Nuvem/álbum. */
-    suspend fun restore(c: Context, ci: CloudItem): Boolean = withContext(Dispatchers.IO) {
-        val src = fullPath(ci) ?: return@withContext false
+    /** Restaura para a pasta original, se der; senão Pictures/Movies/Restaurados/álbum. */
+    suspend fun restore(c: Context, ci: CloudItem, onProgress: ((Float) -> Unit)? = null): Boolean = withContext(Dispatchers.IO) {
+        val src = downloadOriginal(ci, onProgress) ?: fullPath(ci) ?: return@withContext false
+        val srcFile = File(src)
+        if (!srcFile.isFile) return@withContext false
         val video = ci.isVideo
-        val cv = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, ci.name); put(MediaStore.MediaColumns.MIME_TYPE, ci.mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, restoreRelativePath(ci))
-            put(MediaStore.MediaColumns.DATE_TAKEN, ci.taken); put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val coll = if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        var uri: android.net.Uri? = null
-        var pending = false
-        try {
-            uri = c.contentResolver.insert(coll, cv) ?: return@withContext false
-            pending = true
-            c.contentResolver.openOutputStream(uri)!!.use { o -> File(src).inputStream().use { it.copyTo(o) } }
-            c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
-            pending = false
-            true
-        } catch (_: Exception) {
-            if (pending && uri != null) {
-                try { c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) } catch (_: Exception) {}
-                try { c.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+        val rels = listOf(restoreRelativePath(ci), RestoreLogic.mediaRelativePath("", ci.folder, video))
+        for (rel in rels.distinct()) {
+            val cv = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, ci.name.ifBlank { srcFile.name })
+                put(MediaStore.MediaColumns.MIME_TYPE, ci.mime.ifBlank { if (video) "video/mp4" else "image/jpeg" })
+                put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
+                put(MediaStore.MediaColumns.DATE_TAKEN, ci.taken)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
-            false
+            val coll = if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            var uri: android.net.Uri? = null
+            var pending = false
+            try {
+                uri = c.contentResolver.insert(coll, cv) ?: continue
+                pending = true
+                c.contentResolver.openOutputStream(uri)!!.use { o -> srcFile.inputStream().use { it.copyTo(o) } }
+                c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+                pending = false
+                RestoreStore.markKeyDone(ci.chatId, ci.msgId)
+                return@withContext true
+            } catch (_: Exception) {
+                if (pending && uri != null) {
+                    try { c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) } catch (_: Exception) {}
+                    try { c.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+                }
+            }
         }
+        false
     }
 
     suspend fun restoreAlbum(c: Context, folder: String, onProgress: ((Int, Int) -> Unit)? = null): Pair<Int, Int> = withContext(Dispatchers.IO) {
         val items = Db.allCloudMany(Prefs.galleryChats() + listOf(Prefs.secretChatId).filter { it != 0L }).filter { it.folder == folder }
-        var ok = 0
-        items.forEachIndexed { i, ci ->
-            onProgress?.invoke(i, items.size)
-            if (try { restore(c, ci) } catch (_: Exception) { false }) ok++
-        }
-        ok to items.size
+        RestoreStore.enqueue(items.map { RestoreLogic.fromCloud(it) })
+        onProgress?.invoke(0, items.size)
+        0 to items.size
     }
 
     // ---------- Índice invisível de metadados ----------

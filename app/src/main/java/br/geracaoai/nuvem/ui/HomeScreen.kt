@@ -33,6 +33,8 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.work.Backup
+import br.geracaoai.nuvem.work.MediaWatch
+import br.geracaoai.nuvem.work.Restore
 import br.geracaoai.nuvem.work.BatteryGuide
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
@@ -171,10 +173,17 @@ fun BackupScreen(
                     else if (running != null) PillButton("Pausar", Icons.Rounded.Pause, { paused = true; Backup.stop(ctx) }, Modifier.weight(1f), filled = false)
                     else PillButton("Iniciar", Icons.Rounded.CloudUpload, { save(); Backup.runNow(ctx, true) }, Modifier.weight(1f), enabled = sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
                 }
+                Spacer(Modifier.height(8.dp))
+                TextButton({ MediaWatch.procurarNovosAgora(ctx) }, Modifier.fillMaxWidth(), enabled = sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()) {
+                    Icon(Icons.Rounded.Search, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Procurar novos agora")
+                }
             }
         }
         item(key = "batt") { SamsungBatteryCard() }
         item(key = "fail") { FailedUploadsCard() }
+        item(key = "restq") { RestoreQueueCard() }
         item(key = "short") {
             GlassCard(radius = 24.dp, padding = 12.dp) {
                 HomeShortcutRow(
@@ -321,9 +330,14 @@ private fun RestoreSheet(albums: List<String>, onClose: () -> Unit) {
     fun doRestore(name: String) {
         busy = name
         scope.launch {
-            val (ok, total) = try { Repo.restoreAlbum(ctx, name) } catch (_: Exception) { 0 to 0 }
-            ActionLog.add("restaurar", "Restaurou $ok de $total em ${folderLabel(name)}", ok, 0)
-            msg = "Restaurados $ok de $total em ${folderLabel(name)}."
+            try {
+                val items = br.geracaoai.nuvem.data.Db.allCloudMany(Prefs.galleryChats() + listOf(Prefs.secretChatId).filter { it != 0L }).filter { it.folder == name }
+                Restore.enqueue(ctx, items)
+                ActionLog.add("restaurar", "Fila de restauração: ${items.size} em ${folderLabel(name)}", items.size, 0)
+                msg = "Comecei a restaurar ${items.size} itens de ${folderLabel(name)}. Posso continuar em segundo plano."
+            } catch (e: Exception) {
+                msg = e.message ?: "Não deu pra começar a restauração."
+            }
             busy = null
         }
     }
@@ -390,3 +404,33 @@ fun HomeShortcutRow(
 }
 
 private data class Quad<A, B, C, D, E, F>(val a: A, val b: B, val c: C, val d: D, val e: E, val f: F)
+
+@Composable
+fun RestoreQueueCard() {
+    val ctx = LocalContext.current
+    val q by RestoreStore.queue.collectAsStateWithLifecycle()
+    if (q.isEmpty()) return
+    val pending = q.count { it.state == "pending" || it.state == "running" }
+    val done = q.count { it.state == "done" }
+    val failed = q.count { it.state == "failed" }
+    if (pending == 0 && failed == 0 && done == 0) return
+    GlassCard(radius = 24.dp, padding = 16.dp) {
+        Text("Restaurar", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            buildString {
+                if (pending > 0) append("$pending na fila. ")
+                if (done > 0) append("$done restaurado${if (done == 1) "" else "s"}. ")
+                if (failed > 0) append("$failed falharam.")
+            }.trim(),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (pending > 0 || failed > 0) PillButton(if (pending > 0) "Continuar" else "Tentar de novo", Icons.Rounded.Download, {
+                if (failed > 0) RestoreStore.save(q.map { if (it.state == "failed") it.copy(state = "pending", attempts = 0) else it })
+                Restore.start(ctx)
+            })
+        }
+    }
+}

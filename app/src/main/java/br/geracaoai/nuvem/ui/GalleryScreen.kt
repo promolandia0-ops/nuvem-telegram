@@ -1,5 +1,7 @@
 package br.geracaoai.nuvem.ui
 
+import br.geracaoai.nuvem.work.Restore
+
 import android.app.Activity
 import android.graphics.BitmapFactory
 import android.provider.MediaStore
@@ -175,14 +177,10 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
         AnimatedVisibility(selecting, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 96.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xE6151C33)).padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 TextButton({
-                    restoring = true
-                    scope.launch {
-                        val chosen = items.filter { it.msgId in selected }
-                        var ok = 0
-                        chosen.forEach { if (try { Repo.restore(ctx, it) } catch (_: Exception) { false }) ok++ }
-                        restoreMsg = "Restaurados $ok de ${chosen.size}."
-                        restoring = false; selected = emptySet()
-                    }
+                    val chosen = items.filter { it.msgId in selected }
+                    Restore.enqueue(ctx, chosen)
+                    restoreMsg = "${chosen.size} ${if (chosen.size == 1) "item" else "itens"} na fila pra restaurar."
+                    selected = emptySet()
                 }) { Icon(Icons.Rounded.Download, null, tint = Color.White); Spacer(Modifier.width(6.dp)); Text("Restaurar", color = Color.White) }
                 TextButton({ confirmDel = true }) { Icon(Icons.Rounded.DeleteOutline, null, tint = Nv.Rose); Spacer(Modifier.width(6.dp)); Text("Apagar", color = Nv.Rose) }
             }
@@ -194,13 +192,10 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
         title = { Text("Restaurar ${folderLabel(alb)}?") },
         text = { Text("Os arquivos voltam para a pasta original do celular. Nada é apagado da nuvem.") },
         confirmButton = { Button({
-            pendingRestore = null; restoring = true
-            scope.launch {
-                val (ok, total) = try { Repo.restoreAlbum(ctx, alb) } catch (_: Exception) { 0 to items.size }
-                ActionLog.add("restaurar", "Restaurou $ok de $total em ${folderLabel(alb)}", ok, 0)
-                restoreMsg = "Restaurados $ok de $total na pasta original (ou em Nuvem/${folderLabel(alb)})."
-                restoring = false
-            }
+            pendingRestore = null
+            Restore.enqueue(ctx, items)
+            ActionLog.add("restaurar", "Fila pra restaurar ${items.size} em ${folderLabel(alb)}", 0, 0)
+            restoreMsg = "${items.size} itens na fila pra restaurar na pasta original (ou em Restaurados)."
         }) { Text("Restaurar") } },
         dismissButton = { TextButton({ pendingRestore = null }) { Text("Cancelar") } },
     )

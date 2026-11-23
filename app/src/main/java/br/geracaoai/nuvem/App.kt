@@ -20,10 +20,13 @@ class App : Application() {
             NotificationChannel(Backup.CHANNEL, "Backup", NotificationManager.IMPORTANCE_LOW))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(br.geracaoai.nuvem.play.PlaybackService.CHANNEL, "Player", NotificationManager.IMPORTANCE_LOW))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(br.geracaoai.nuvem.work.Restore.CHANNEL, "Restaurar", NotificationManager.IMPORTANCE_LOW))
         Td.init(this)
         Backup.schedule(this)
         br.geracaoai.nuvem.work.NetworkWatch.start(this)
         br.geracaoai.nuvem.work.WatchedSync.schedule(this)
+        br.geracaoai.nuvem.data.RestoreStore.load()
         br.geracaoai.nuvem.work.MediaWatch.start(this)
     }
 }

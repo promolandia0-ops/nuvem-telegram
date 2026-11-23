@@ -1,5 +1,7 @@
 package br.geracaoai.nuvem.ui
 
+import br.geracaoai.nuvem.work.Restore
+
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
@@ -22,6 +24,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.*
@@ -149,6 +152,7 @@ fun VideoPlayer(
     var texture by remember { mutableStateOf<TextureView?>(null) }
     var bgAudio by remember { mutableStateOf(PlayerHolder.backgroundAudio) }
     var brightness by remember { mutableFloatStateOf(act?.window?.attributes?.screenBrightness?.takeIf { it >= 0 } ?: 0.5f) }
+    var seekPreview by remember { mutableStateOf<Long?>(null) }
 
     val player = remember(src?.fileId, retry) {
         val s = src ?: return@remember null
@@ -456,12 +460,10 @@ fun VideoPlayer(
                         IconButton({ menu = true }) { Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White) }
                         DropdownMenu(menu, { menu = false }) {
                             DropdownMenuItem(text = { Text("Detalhes") }, onClick = { menu = false; info = true }, leadingIcon = { Icon(Icons.Rounded.Info, null) })
-                            DropdownMenuItem(text = { Text("Baixar pro celular") }, onClick = {
+                            DropdownMenuItem(text = { Text("Restaurar") }, onClick = {
                                 menu = false
-                                scope.launch {
-                                    hud = "Baixando…"
-                                    hud = if (try { Repo.restore(ctx, ci) } catch (_: Exception) { false }) "Salvo na galeria (pasta Nuvem)" else "Falha ao baixar"
-                                }
+                                Restore.enqueue(ctx, listOf(ci))
+                                hud = "Restaurar na fila"
                             }, leadingIcon = { Icon(Icons.Rounded.Download, null) })
                             DropdownMenuItem(text = { Text("Compartilhar") }, onClick = { menu = false; compartilhar() }, leadingIcon = { Icon(Icons.Rounded.Share, null) })
                             DropdownMenuItem(text = { Text("Capturar quadro") }, onClick = { menu = false; captura() }, leadingIcon = { Icon(Icons.Rounded.Screenshot, null) })
@@ -502,7 +504,7 @@ fun VideoPlayer(
                         Icon(Icons.Rounded.SkipPrevious, "Anterior", tint = if (prevIdx != null) Color.White else Color.White.copy(alpha = 0.3f), modifier = Modifier.size(36.dp))
                     }
                     IconButton({ seekRel(true) }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.Replay, "−6 s", tint = Color.White, modifier = Modifier.size(28.dp))
+                        Icon(Icons.Rounded.Replay, "−10 s", tint = Color.White, modifier = Modifier.size(28.dp))
                     }
                     FilledIconButton({
                         val p = player ?: return@FilledIconButton
@@ -511,7 +513,7 @@ fun VideoPlayer(
                         Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, if (playing) "Pausar" else "Reproduzir", modifier = Modifier.size(36.dp))
                     }
                     IconButton({ seekRel(false) }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Rounded.Forward10, "+6 s", tint = Color.White, modifier = Modifier.size(28.dp))
+                        Icon(Icons.Rounded.Forward10, "+10 s", tint = Color.White, modifier = Modifier.size(28.dp))
                     }
                     IconButton({ nextIdx?.let { onIndex(it) } }, enabled = nextIdx != null, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Rounded.SkipNext, "Próximo", tint = if (nextIdx != null) Color.White else Color.White.copy(alpha = 0.3f), modifier = Modifier.size(36.dp))
@@ -525,13 +527,23 @@ fun VideoPlayer(
                     val d = dur.coerceAtLeast(0L)
                     val frac = if (d > 0) (pos.toFloat() / d).coerceIn(0f, 1f) else 0f
                     val buf = if (d > 0) (buffered.toFloat() / d).coerceIn(0f, 1f) else 0f
+                    Box(Modifier.fillMaxWidth()) {
+                        seekPreview?.let { tpos ->
+                            val x = if (d > 0) (tpos.toFloat() / d).coerceIn(0f, 1f) else 0f
+                            Surface(Modifier.align(Alignment.TopStart).padding(start = (x * 220).dp, bottom = 4.dp), color = Color.Black.copy(0.8f), shape = RoundedCornerShape(10.dp)) {
+                                Text(TempoFmt.fmt(tpos), color = Color.White, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
                     Box(Modifier.fillMaxWidth().height(28.dp), contentAlignment = Alignment.Center) {
                         LinearProgressIndicator(buf, Modifier.fillMaxWidth().height(3.dp), color = Color.White.copy(alpha = 0.35f), trackColor = Color.White.copy(alpha = 0.15f))
-                        Slider(frac, { v -> if (d > 0) player?.seekTo((v * d).toLong()) }, modifier = Modifier.fillMaxWidth(), colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.Transparent))
+                        Slider(frac, { v -> if (d > 0) { val tpos = (v * d).toLong(); seekPreview = tpos; player?.seekTo(tpos) } }, modifier = Modifier.fillMaxWidth(), colors = SliderDefaults.colors(thumbColor = Nv.Cyan, activeTrackColor = Nv.Cyan, inactiveTrackColor = Color.Transparent), onValueChangeFinished = { seekPreview = null })
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(TempoFmt.fmt(pos), color = Color.White, style = MaterialTheme.typography.labelMedium)
                         Text("  ·  ${TempoFmt.fmt(d)}", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelMedium)
+                        TextButton({ Restore.enqueue(ctx, listOf(ci)); hud = "Restaurar na fila" }) { Text("Restaurar", color = Color.White) }
+                        TextButton({ compartilhar() }) { Text("Enviar", color = Color.White) }
                         Spacer(Modifier.weight(1f))
                         TextButton({ speed = Velocidade.proxima(speed); player?.setPlaybackSpeed(speed); hud = Velocidade.rotulo(speed) }) {
                             Text(Velocidade.rotulo(speed), color = Color.White)

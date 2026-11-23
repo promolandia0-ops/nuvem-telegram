@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import br.geracaoai.nuvem.ui.FeatureTags
 import br.geracaoai.nuvem.ui.FeatureWiringHost
 import org.junit.Rule
@@ -47,16 +48,17 @@ class UiWiringTest {
         host()
         compose.onNodeWithTag(FeatureTags.SHORTCUT_LIBERAR).performClick()
         compose.onNodeWithTag(FeatureTags.PANE_LIBERAR).assertIsDisplayed()
-        compose.onNodeWithText("Câmera").assertIsDisplayed()
-        compose.onNodeWithText("DCIM").assertIsDisplayed()
+        compose.onNodeWithText("Câmera").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("DCIM").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun liberarFolderSelectAllSkipsUnsavedAndConfirms() {
         host()
         compose.onNodeWithTag(FeatureTags.SHORTCUT_LIBERAR).performClick()
-        compose.onNodeWithTag(FeatureTags.liberarPastaTag("Camera")).performClick()
+        compose.onNodeWithTag(FeatureTags.liberarPastaTag("Camera")).performScrollTo().performClick()
         compose.onNodeWithTag(FeatureTags.PANE_PASTA_LIBERAR).assertExists()
         compose.onNodeWithText("Selecionar todos").assertIsDisplayed()
+        compose.onNodeWithTag(FeatureTags.GRID_PASTA).performScrollToIndex(2)
         compose.onNodeWithText("não salvo").assertIsDisplayed()
         compose.onNodeWithTag(FeatureTags.FILTER_TODOS).assertIsDisplayed()
         compose.onNodeWithTag(FeatureTags.FILTER_APARELHO).assertIsDisplayed()

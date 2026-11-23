@@ -8,6 +8,10 @@ enum class FolderItemKind { LOCAL_PENDING, LOCAL_BACKED, CLOUD_ONLY }
 
 enum class FolderMediaFilter { ALL, ON_DEVICE, CLOUD_ONLY }
 
+enum class FolderTypeFilter { ALL, PHOTOS, VIDEOS }
+
+enum class FolderSort { DATE, SIZE }
+
 data class FolderMediaItem(
     val id: String,
     val name: String,
@@ -119,4 +123,24 @@ object FolderMedia {
 
     fun skippedCount(selectedCount: Int, verifiedCount: Int): Int =
         (selectedCount - verifiedCount).coerceAtLeast(0)
+
+    fun applyType(items: List<FolderMediaItem>, type: FolderTypeFilter): List<FolderMediaItem> = when (type) {
+        FolderTypeFilter.ALL -> items
+        FolderTypeFilter.PHOTOS -> items.filter { !it.isVideo }
+        FolderTypeFilter.VIDEOS -> items.filter { it.isVideo }
+    }
+
+    fun applySort(items: List<FolderMediaItem>, sort: FolderSort): List<FolderMediaItem> = when (sort) {
+        FolderSort.DATE -> items
+        FolderSort.SIZE -> items.sortedWith(compareByDescending<FolderMediaItem> { it.size }.thenByDescending { it.taken })
+    }
+
+    fun restoreIds(items: List<FolderMediaItem>): Set<String> =
+        items.filter { it.kind == FolderItemKind.CLOUD_ONLY && it.cloud != null }.map { it.id }.toSet()
+
+    fun toggleAny(selected: Set<String>, id: String, items: List<FolderMediaItem>): Set<String> {
+        val item = items.firstOrNull { it.id == id } ?: return selected
+        if (item.kind == FolderItemKind.LOCAL_PENDING) return selected
+        return if (id in selected) selected - id else selected + id
+    }
 }

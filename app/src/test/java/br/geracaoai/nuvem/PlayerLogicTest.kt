@@ -5,13 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PlayerLogicTest {
-    @Test fun puloSeisSegundos() {
-        assertEquals(4_000L, PuloToque.alvo(10_000, 60_000, true))
-        assertEquals(16_000L, PuloToque.alvo(10_000, 60_000, false))
+    @Test fun puloDezSegundos() {
+        assertEquals(0L, PuloToque.alvo(10_000, 60_000, true))
+        assertEquals(20_000L, PuloToque.alvo(10_000, 60_000, false))
         assertEquals(0L, PuloToque.alvo(2_000, 60_000, true))
         assertEquals(60_000L, PuloToque.alvo(58_000, 60_000, false))
-        assertEquals("−6 s", PuloToque.hud(true))
-        assertEquals("+6 s", PuloToque.hud(false))
+        assertEquals("−10 s", PuloToque.hud(true))
+        assertEquals("+10 s", PuloToque.hud(false))
     }
 
     @Test fun loopAB() {

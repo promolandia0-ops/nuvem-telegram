@@ -3,6 +3,7 @@ package br.geracaoai.nuvem.data
 import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.json.JSONArray
 import org.json.JSONObject
 
 object Prefs {
@@ -70,4 +71,69 @@ object Prefs2 {
     var watchedLast: Long get() = p.getLong("wlast", 0); set(v) = p.edit().putLong("wlast", v).apply()
     var watchedError: String get() = p.getString("werr", "")!!; set(v) = p.edit().putString("werr", v).apply()
     var batteryGuideDismissed: Boolean get() = p.getBoolean("batt_guide_done", false); set(v) = p.edit().putBoolean("batt_guide_done", v).apply()
+}
+
+object FolderRoots {
+    private const val KEY = "folder_roots"
+    fun forBucket(bucket: String): Set<String> {
+        if (bucket.isBlank()) return emptySet()
+        return try {
+            val j = JSONObject(Prefs.raw.getString(KEY, "{}") ?: "{}")
+            val a = j.optJSONArray(bucket) ?: return emptySet()
+            (0 until a.length()).mapNotNull { a.optString(it).takeIf { s -> s.isNotBlank() } }.toSet()
+        } catch (_: Exception) { emptySet() }
+    }
+    fun add(more: Map<String, Set<String>>) {
+        if (more.isEmpty()) return
+        try {
+            val j = JSONObject(Prefs.raw.getString(KEY, "{}") ?: "{}")
+            for ((b, rels) in more) {
+                val set = HashSet<String>()
+                val a = j.optJSONArray(b)
+                if (a != null) for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotBlank() }?.let { set += it }
+                set += rels
+                val n = org.json.JSONArray()
+                set.forEach { n.put(it) }
+                j.put(b, n)
+            }
+            Prefs.raw.edit().putString(KEY, j.toString()).apply()
+        } catch (_: Exception) {}
+    }
+}
+
+object RestoreStore {
+    private const val QUEUE = "restore_queue"
+    private const val DONE = "restore_done"
+    private const val PRIORITY = "backup_priority_paths"
+    val queue = kotlinx.coroutines.flow.MutableStateFlow<List<RestoreLogic.Task>>(emptyList())
+
+    fun load() { queue.value = RestoreLogic.fromJson(try { Prefs.raw.getString(QUEUE, "[]") } catch (_: Exception) { "[]" }) }
+
+    fun save(list: List<RestoreLogic.Task>) {
+        try { Prefs.raw.edit().putString(QUEUE, RestoreLogic.toJson(list)).commit() } catch (_: Exception) {}
+        queue.value = list
+    }
+
+    fun enqueue(items: List<RestoreLogic.Task>) { save(RestoreLogic.enqueue(loadOr(), items)) }
+
+    fun loadOr(): List<RestoreLogic.Task> = queue.value.ifEmpty { RestoreLogic.fromJson(try { Prefs.raw.getString(QUEUE, "[]") } catch (_: Exception) { "[]" }) }
+
+    fun isRestored(chatId: Long, msgId: Long): Boolean {
+        val k = RestoreLogic.restoreKey(chatId, msgId)
+        if (loadOr().any { it.key == k && it.state == "done" }) return true
+        return try { Prefs.raw.getStringSet(DONE, emptySet())?.contains(k) == true } catch (_: Exception) { false }
+    }
+
+    fun markKeyDone(chatId: Long, msgId: Long) {
+        val k = RestoreLogic.restoreKey(chatId, msgId)
+        try {
+            val s = HashSet(Prefs.raw.getStringSet(DONE, emptySet()) ?: emptySet())
+            s += k
+            Prefs.raw.edit().putStringSet(DONE, s).apply()
+        } catch (_: Exception) {}
+    }
+
+    var priorityPaths: Set<String>
+        get() = try { Prefs.raw.getStringSet(PRIORITY, emptySet()) ?: emptySet() } catch (_: Exception) { emptySet() }
+        set(v) { try { Prefs.raw.edit().putStringSet(PRIORITY, v).apply() } catch (_: Exception) {} }
 }

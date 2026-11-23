@@ -1,5 +1,7 @@
 package br.geracaoai.nuvem.ui
 
+import br.geracaoai.nuvem.work.Restore
+
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,7 +62,7 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
                     modifier = Modifier.statusBarsPadding())
                 Spacer(Modifier.weight(1f))
                 Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = .4f)).navigationBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    ViewerAction(Icons.Rounded.Download, "Restaurar") { cur?.let { c -> scope.launch { snack.showSnackbar("Baixando…"); snack.showSnackbar(if (try { Repo.restore(ctx, c) } catch (_: Exception) { false }) "Salvo em Imagens/Vídeos › Nuvem" else "Falha ao restaurar") } } }
+                    ViewerAction(Icons.Rounded.Download, "Restaurar") { cur?.let { c -> Restore.enqueue(ctx, listOf(c)); scope.launch { snack.showSnackbar("Restaurar na fila") } } }
                     ViewerAction(Icons.Rounded.Info, "Detalhes") { info = true }
                     ViewerAction(Icons.Rounded.DeleteOutline, "Apagar") { confirmDel = true }
                 }

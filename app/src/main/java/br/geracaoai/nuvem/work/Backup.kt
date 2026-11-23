@@ -242,8 +242,15 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
         val max = Meta.maxSize(Td.isPremium.value)
         val selected = Prefs.folders + Prefs.secretFolders
-        report(0, 0, "Lendo pastas…", 0)
-        val counts = withContext(Dispatchers.IO) { LocalMedia.countByBucket(applicationContext, selected) }
+        report(0, 0, "Procurando arquivos nas pastas…", 0)
+        val folderCache = HashMap<String, List<LocalItem>>()
+        fun loadFolder(name: String): List<LocalItem> = folderCache.getOrPut(name) {
+            val prio = RestoreStore.priorityPaths
+            val items = LocalMedia.scanAndWalk(applicationContext, name).filter { it.size in 1..max && File(it.path).canRead() }
+            if (prio.isEmpty()) items
+            else items.sortedWith(compareBy<LocalItem> { if (it.path in prio) 0 else 1 }.thenBy { it.taken }.thenBy { it.mediaId })
+        }
+        val counts = withContext(Dispatchers.IO) { selected.associateWith { loadFolder(it).size } }
         val folders = FolderPlan.order(selected.filter { (counts[it] ?: 0) > 0 })
         val total = folders.sumOf { counts[it] ?: 0 }
         if (folders.isEmpty() || total == 0) {
@@ -257,9 +264,9 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val seen = HashSet<String>()
         val deferred = ArrayList<DeferredUpload>()
         val runStarted = Checkpoint.load()?.startedAt?.takeIf { it > 0 } ?: System.currentTimeMillis()
-
-        fun loadFolder(name: String): List<LocalItem> =
-            LocalMedia.inBucket(applicationContext, name).filter { it.size in 1..max && File(it.path).canRead() }
+        val cloudIndex = try {
+            Db.allCloudMany(Prefs.allKnownChats()).map { CloudIdentity(it.path, it.name, it.size, it.hash) }
+        } catch (_: Exception) { emptyList() }
 
         fun isDocPair(p: Pair<LocalItem, String>): Boolean {
             val mime = p.first.mime.ifBlank { Meta.mimeFromName(p.first.name) }
@@ -322,11 +329,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                             if (isStopped || Prefs2.backupPaused) break
                             coroutineContext.ensureActive()
                             val h = try { Repo.localHash(i) } catch (_: Exception) { "" }
-                            val existing = h.isNotBlank() && (Repo.alreadyOnCloud(h, i.size, i.name) || !Dedup.claimHash(seen, h, i.size))
+                            val existing = BackupDiff.isUploaded(i.path, i.size, h, cloudIndex) ||
+                                (h.isNotBlank() && !Dedup.claimHash(seen, h, i.size))
                             if (existing || h.isBlank()) {
                                 val needOrig = Prefs.originalPhotos && i.mime.startsWith("image/") &&
                                     h.isNotBlank() && Db.originalByHash(chat, h) == null && Db.anyByHash(h)?.folder != ORIGINALS_FOLDER &&
-                                    Repo.alreadyOnCloud(h, i.size, i.name)
+                                    BackupDiff.isUploaded(i.path, i.size, h, cloudIndex)
                                 evs.send(Ev.Skip(i, h, needOrig))
                             } else evs.send(Ev.Ready(i, h))
                         }
@@ -464,6 +472,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         if (secretChat != 0L) try { Repo.pushIndex(secretChat) } catch (_: Exception) {}
         Prefs.lastBackup = System.currentTimeMillis()
         Prefs.lastError = if (leftover.isNotEmpty()) "Alguns arquivos não foram enviados. Veja Falharam." else ""
+        RestoreStore.priorityPaths = emptySet()
         Checkpoint.clear()
         return Result.success(workDataOf("sent" to (sentPhotos + sentVideos + sentDocs), "summary" to summary))
     }

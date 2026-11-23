@@ -2,13 +2,13 @@ package br.geracaoai.nuvem.data
 
 /** Toque duplo: ±6 s. */
 object PuloToque {
-    const val MS = 6_000L
+    const val MS = 10_000L
     fun alvo(pos: Long, dur: Long, esquerda: Boolean): Long {
         val d = if (esquerda) -MS else MS
         val fim = if (dur > 0L) dur else Long.MAX_VALUE
         return (pos + d).coerceIn(0L, fim)
     }
-    fun hud(esquerda: Boolean): String = if (esquerda) "−6 s" else "+6 s"
+    fun hud(esquerda: Boolean): String = if (esquerda) "−10 s" else "+10 s"
 }
 
 enum class ModoRepeticao(val rotulo: String) {
