@@ -419,6 +419,11 @@ fun FreeFoldersSheet(
     }
     val list = (loaded ?: emptyList()).filter { FolderMedia.hasBackup(it.included, it.cloudCount) }
     ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Button(
+            onClick = { br.geracaoai.nuvem.work.FreeAsk.request.value = true; onClose() },
+            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp).padding(top = 8.dp),
+        ) { Text("Limpar tudo que já está na nuvem") }
+        Text("Apaga do celular tudo que já está no Telegram, de todas as pastas, de uma vez. Antes mostra quanto vai liberar e pede OK ou Cancelar. Confere cada arquivo de novo no Telegram.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         FreeFoldersBody(
             folders = list,
             loading = loading,

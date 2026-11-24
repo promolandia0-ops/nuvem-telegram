@@ -35,6 +35,13 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { NuvemTheme { Root() } }
+        if (intent?.getBooleanExtra("freeAsk", false) == true) br.geracaoai.nuvem.work.FreeAsk.request.value = true
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("freeAsk", false)) br.geracaoai.nuvem.work.FreeAsk.request.value = true
     }
 
     fun aplicarOrientacao(codigo: Int) { requestedOrientation = codigo }
@@ -101,6 +108,7 @@ fun MainShell(onLogout: () -> Unit) {
     BackHandler(viewer == null && browseFolder == null && tab == 1 && (galleryFolder != null || videosOnly)) { galleryFolder = null; videosOnly = false }
     AuroraBackdrop {
         Box(Modifier.fillMaxSize().statusBarsPadding()) {
+            FreeAskDialog()
             AnimatedContent(tab, Modifier.fillMaxSize(), transitionSpec = {
                 val dir = if (targetState > initialState) 1 else -1
                 (slideInHorizontally { it / 8 * dir } + fadeIn()) togetherWith (slideOutHorizontally { -it / 8 * dir } + fadeOut())

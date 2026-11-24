@@ -189,7 +189,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     override suspend fun doWork(): Result {
         Td.init(applicationContext)
         keep.acquire()
-        if (Prefs.chatId == 0L || (Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) || Prefs2.backupPaused) {
+        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) || Prefs2.backupPaused) {
             keep.release(); return Result.success()
         }
         if (!Td.awaitReady()) { keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry() }
@@ -238,15 +238,16 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             }
         }
         report(0, 0, "Conferindo o que está no Telegram…", 0)
-        try { Repo.reconcileCloud(force = true) { done, tot -> report(done, tot, "Conferindo o Telegram… $done/$tot", 0) } } catch (_: Exception) {}
+        try { Repo.reconcileCloud() { done, tot -> report(done, tot, "Conferindo o Telegram… $done/$tot", 0) } } catch (_: Exception) {}
 
         val max = Meta.maxSize(Td.isPremium.value)
-        val selected = Prefs.folders + Prefs.secretFolders
+        val allByBucket: Map<String, List<LocalItem>> by lazy { MediaScan.allAnywhere(applicationContext).groupBy { it.bucket } }
+        val selected = if (Prefs.backupAll) allByBucket.keys.toSet() else Prefs.folders + Prefs.secretFolders
         report(0, 0, "Procurando arquivos nas pastas…", 0)
         val folderCache = HashMap<String, List<LocalItem>>()
         fun loadFolder(name: String): List<LocalItem> = folderCache.getOrPut(name) {
             val prio = RestoreStore.priorityPaths
-            val items = LocalMedia.scanAndWalk(applicationContext, name).filter { it.size in 1..max && (File(it.path).canRead() || it.mediaId > 0 || AllFilesAccess.granted()) }
+            val items = (if (Prefs.backupAll) allByBucket[name].orEmpty() else LocalMedia.scanAndWalk(applicationContext, name)).filter { it.size in 1..max && (File(it.path).canRead() || it.mediaId > 0 || AllFilesAccess.granted()) }
             if (prio.isEmpty()) items
             else items.sortedWith(compareBy<LocalItem> { if (it.path in prio) 0 else 1 }.thenBy { it.taken }.thenBy { it.mediaId })
         }
@@ -474,6 +475,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         Prefs.lastError = if (leftover.isNotEmpty()) "Alguns arquivos não foram enviados. Veja Falharam." else ""
         RestoreStore.priorityPaths = emptySet()
         Checkpoint.clear()
+        try { FreeAsk.check(applicationContext) } catch (_: Exception) {}
         return Result.success(workDataOf("sent" to (sentPhotos + sentVideos + sentDocs), "summary" to summary))
     }
 }

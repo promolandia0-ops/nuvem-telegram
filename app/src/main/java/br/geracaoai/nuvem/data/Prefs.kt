@@ -16,6 +16,10 @@ object Prefs {
     var chatId: Long get() = p.getLong("chat_id", 0); set(v) = p.edit().putLong("chat_id", v).apply()
     var chatTitle: String get() = p.getString("chat_title", "")!!; set(v) = p.edit().putString("chat_title", v).apply()
     var folders: Set<String> get() = p.getStringSet("folders", emptySet())!!; set(v) = p.edit().putStringSet("folders", v).apply()
+    /** Backup de todas as fotos e vídeos do aparelho (sem miniaturas). */
+    var backupAll: Boolean get() = p.getBoolean("backup_all", true); set(v) = p.edit().putBoolean("backup_all", v).apply()
+    /** Depois do backup, pergunta "Liberar X? OK / Cancelar" para apagar do aparelho o que já está no Telegram. */
+    var autoFreeAsk: Boolean get() = p.getBoolean("auto_free_ask", true); set(v) = p.edit().putBoolean("auto_free_ask", v).apply()
     var autoBackup: Boolean get() = p.getBoolean("auto", true); set(v) = p.edit().putBoolean("auto", v).apply()
     var wifiOnly: Boolean get() = p.getBoolean("wifi", true); set(v) = p.edit().putBoolean("wifi", v).apply()
     var chargingOnly: Boolean get() = p.getBoolean("charging", false); set(v) = p.edit().putBoolean("charging", v).apply()
