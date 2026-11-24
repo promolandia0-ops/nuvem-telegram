@@ -122,7 +122,7 @@ fun BackupScreen(
     }
 
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) { try { Repo.purgeIconsOnce(ctx) } catch (_: Exception) {} }
+        withContext(Dispatchers.IO) { try { Repo.purgeIconsOnce(ctx) } catch (e: Exception) { br.geracaoai.nuvem.data.DiagLog.log("ÍCONES", "falhou ao apagar ícones", e) } }
     }
 
     val life = LocalLifecycleOwner.current
@@ -211,9 +211,9 @@ fun BackupScreen(
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (paused) PillButton("Retomar", Icons.Rounded.PlayArrow, { paused = false; scope.launch(Dispatchers.IO) { save(); Backup.resume(ctx) } }, Modifier.weight(1f), enabled = Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
-                    else if (running != null) PillButton("Pausar", Icons.Rounded.Pause, { paused = true; scope.launch(Dispatchers.IO) { Backup.stop(ctx) } }, Modifier.weight(1f), filled = false)
-                    else PillButton("Iniciar", Icons.Rounded.CloudUpload, { scope.launch(Dispatchers.IO) { save(); Backup.runNow(ctx, true) } }, Modifier.weight(1f), enabled = Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
+                    if (paused) PillButton("Retomar", Icons.Rounded.PlayArrow, { br.geracaoai.nuvem.data.DiagLog.log("TOQUE", "Retomar"); paused = false; scope.launch(Dispatchers.IO) { save(); Backup.resume(ctx) } }, Modifier.weight(1f), enabled = Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
+                    else if (running != null) PillButton("Pausar", Icons.Rounded.Pause, { br.geracaoai.nuvem.data.DiagLog.log("TOQUE", "Pausar"); paused = true; scope.launch(Dispatchers.IO) { Backup.stop(ctx) } }, Modifier.weight(1f), filled = false)
+                    else PillButton("Iniciar", Icons.Rounded.CloudUpload, { br.geracaoai.nuvem.data.DiagLog.log("TOQUE", "Iniciar"); scope.launch(Dispatchers.IO) { save(); Backup.runNow(ctx, true) } }, Modifier.weight(1f), enabled = Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -242,10 +242,12 @@ fun BackupScreen(
             running = running != null,
             onBackupAll = { list ->
                 if (list.isNotEmpty()) RestoreStore.priorityPaths = emptySet()
+                br.geracaoai.nuvem.data.DiagLog.log("TOQUE", "Sim (backup de todos os novos: ${list.size})")
                 scope.launch(Dispatchers.IO) { Backup.runNow(ctx, true) }
             },
             onBackupBiggest = { list ->
                 RestoreStore.priorityPaths = list.sortedByDescending { it.size }.take(30).map { it.path }.toSet()
+                br.geracaoai.nuvem.data.DiagLog.log("TOQUE", "Enviar os maiores primeiro")
                 scope.launch(Dispatchers.IO) { Backup.runNow(ctx, true) }
             },
             onSeeNew = { onBrowseFolder(summary?.folders?.firstOrNull { it.newCount > 0 }?.folder ?: (Prefs.folders + Prefs.secretFolders).firstOrNull().orEmpty()) },

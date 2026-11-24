@@ -54,6 +54,6 @@ class WatchedWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p)
             Prefs2.watchedError = ""
             Result.success(workDataOf("sent" to sent))
         } catch (e: CancellationException) { throw e
-        } catch (e: Exception) { if (isStopped || Prefs2.watchedPaused) Result.success() else { Prefs2.watchedError = e.message ?: "erro"; Result.retry() } }
+        } catch (e: Exception) { if (isStopped || Prefs2.watchedPaused) Result.success() else { br.geracaoai.nuvem.data.DiagLog.log("ASSISTIDOS", "falhou", e); Prefs2.watchedError = e.message ?: "erro"; Result.retry() } }
     }
 }

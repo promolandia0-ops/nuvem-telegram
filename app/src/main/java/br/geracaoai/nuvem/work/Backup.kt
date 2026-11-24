@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.work.*
+import br.geracaoai.nuvem.data.DiagLog
 import br.geracaoai.nuvem.R
 import br.geracaoai.nuvem.data.*
 import br.geracaoai.nuvem.tg.Td
@@ -98,6 +99,7 @@ object Backup {
     }
 
     fun runNow(c: Context, ignoreConstraints: Boolean = false, expedited: Boolean = false) {
+        DiagLog.log("BACKUP", "pedido de início: manual=$ignoreConstraints pausado=${Prefs2.backupPaused} trava=${gate.get()}")
         // Toque do usuário (Iniciar/Sim/Retomar) tira a pausa e sempre começa.
         if (ignoreConstraints) {
             Prefs2.backupPaused = false
@@ -195,22 +197,26 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     override suspend fun doWork(): Result {
         Td.init(applicationContext)
         keep.acquire()
-        if (Prefs2.backupPaused) { keep.release(); return Result.success() }
+        if (Prefs2.backupPaused) { DiagLog.log("BACKUP", "não começou: pausado"); keep.release(); return Result.success() }
         if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty())) {
             Prefs.lastError = "Escolha o chat do Telegram em Ajustes para o backup começar."
+            DiagLog.log("BACKUP", "não começou: sem chat ou sem pasta")
             keep.release(); return Result.success()
         }
         if (!Td.awaitReady()) {
             Prefs.lastError = "Telegram ainda não conectou. Tentando de novo."
+            DiagLog.log("BACKUP", "não começou: Telegram não ficou pronto, nova tentativa")
             keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry()
         }
         if (!Backup.tryStart()) {
             Prefs.lastError = "Outro backup ainda está terminando. Começa logo em seguida."
+            DiagLog.log("BACKUP", "não começou: trava ocupada, reagendando")
             keep.release(); Backup.continueSoon(applicationContext, 1); return Result.success()
         }
+        DiagLog.log("BACKUP", "começou")
         return try {
             startForegroundSafe()
-            runBackup()
+            runBackup().also { DiagLog.log("BACKUP", "rodada terminou: $it") }
         } catch (e: java.util.concurrent.CancellationException) {
             if (Checkpoint.shouldResume() && !Prefs2.backupPaused) Backup.continueSoon(applicationContext, 1)
             throw e
@@ -218,11 +224,13 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             if (Checkpoint.shouldResume() && !Prefs2.backupPaused) Backup.continueSoon(applicationContext, 1)
             throw e
         } catch (e: Exception) {
-            if (isStopped || Prefs2.backupPaused || isCancel(e)) return Result.success()
+            if (isStopped || Prefs2.backupPaused || isCancel(e)) { DiagLog.log("BACKUP", "parou (cancelado ou pausado)"); return Result.success() }
             if (isFgsTimeout(e) || nearTimeout()) {
+                DiagLog.log("BACKUP", "tempo esgotado, continua depois", e)
                 Backup.continueSoon(applicationContext, 1)
                 return Result.success()
             }
+            DiagLog.log("BACKUP", "erro no backup", e)
             Prefs.lastError = e.message ?: "erro"
             try { setProgress(workDataOf("name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
             Backup.continueSoon(applicationContext, 2)

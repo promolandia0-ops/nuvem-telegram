@@ -102,6 +102,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
     var destResend by remember { mutableStateOf(false) }
     var showFree by remember { mutableStateOf(false) }
     var showDiag by remember { mutableStateOf(false) }
+    var showAppDiag by remember { mutableStateOf(false) }
     val premium by Td.isPremium.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         try {
@@ -150,6 +151,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
                 Column(Modifier.testTag(FeatureTags.SETTINGS_DUPLICADAS)) { DupCleanRow() }
                 SecretSettingsRow()
                 SettingsLine(Icons.Rounded.Info, "Diagnóstico de pastas", "Arquivos no disco, no Telegram e arquivos novos") { showDiag = true }
+                SettingsLine(Icons.Rounded.Info, "Diagnóstico do app", "Erros, travamentos e o que o backup fez. Copie e mande aqui") { showAppDiag = true }
                 SettingsLine(Icons.Rounded.Sync, "Reindexar nuvem", if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)", enabled = !syncing, tag = FeatureTags.SETTINGS_REINDEXAR) {
                     syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false }
                 }
@@ -166,6 +168,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
     }
     if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = onBrowseFolder)
     if (showDiag) FolderDiagSheet({ showDiag = false })
+    if (showAppDiag) AppDiagSheet({ showAppDiag = false })
     if (destConfirm) AlertDialog(
         { destConfirm = false },
         title = { Text("Trocar destino?") },

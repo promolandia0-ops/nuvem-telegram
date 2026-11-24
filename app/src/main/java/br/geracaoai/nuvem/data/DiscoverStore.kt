@@ -18,6 +18,7 @@ object DiscoverStore {
             summary.value = s
             s
         } catch (e: Exception) {
+            DiagLog.log("PROCURA", "falhou ao procurar arquivos", e)
             val s = DiscoverSummary(error = e.message ?: "Falha ao procurar arquivos")
             summary.value = s
             s

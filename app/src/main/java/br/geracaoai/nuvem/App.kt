@@ -14,6 +14,13 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         Prefs.init(this)
+        br.geracaoai.nuvem.data.DiagLog.init(this)
+        val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try { br.geracaoai.nuvem.data.DiagLog.log("CRASH", "thread ${t.name}", e) } catch (_: Throwable) {}
+            prevHandler?.uncaughtException(t, e)
+        }
+        br.geracaoai.nuvem.data.DiagLog.log("APP", "app iniciou")
         Db.init(this)
         ActionLog.load(); FailStore.load()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
