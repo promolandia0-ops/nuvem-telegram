@@ -1,6 +1,5 @@
 package br.geracaoai.nuvem.ui
 
-import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -8,8 +7,6 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -30,7 +27,6 @@ import androidx.compose.ui.unit.dp
 import br.geracaoai.nuvem.data.DiagLog
 import br.geracaoai.nuvem.data.Prefs
 import br.geracaoai.nuvem.tg.Td
-import br.geracaoai.nuvem.tg.Tg
 import br.geracaoai.nuvem.work.Engine
 import br.geracaoai.nuvem.work.Sched
 import kotlinx.coroutines.launch
@@ -295,18 +291,6 @@ fun HomeScreen() {
     var verDiag by remember { mutableStateOf(false) }
     var auto by remember { mutableStateOf(Prefs.autoBackup) }
     var wifi by remember { mutableStateOf(Prefs.wifiOnly) }
-    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
-    LaunchedEffect(Unit) {
-        perms.launch(
-            arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_EXTERNAL_STORAGE,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ),
-        )
-        try { Tg.ensureDestination() } catch (_: Exception) {}
-    }
     if (verDiag) {
         DiagScreen(onBack = { verDiag = false })
         return
@@ -316,12 +300,17 @@ fun HomeScreen() {
     Column(
         Modifier
             .fillMaxSize()
-            .systemBarsPadding()
+            .statusBarsPadding()
             .verticalScroll(rememberScrollState())
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("Nuvem", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(
+            "Nuvem",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
         Text(
             "Suas fotos e vídeos guardados no Telegram.",
             style = MaterialTheme.typography.bodyMedium,
@@ -487,7 +476,7 @@ fun DiagScreen(onBack: () -> Unit) {
     }
     LaunchedEffect(Unit) { atualizar() }
 
-    Column(Modifier.fillMaxSize().systemBarsPadding().padding(16.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
             Text("Diagnóstico", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)

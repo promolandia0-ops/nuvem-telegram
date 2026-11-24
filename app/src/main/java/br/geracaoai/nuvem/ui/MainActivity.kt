@@ -5,7 +5,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -30,8 +33,13 @@ class MainActivity : ComponentActivity() {
 fun NuvemTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
-        content = content,
-    )
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+        ) { content() }
+    }
 }
 
 /** Escolhe a tela: primeiro a chave da API, depois o login, depois o painel. */
@@ -41,7 +49,7 @@ fun Root() {
     var temApi by remember { mutableStateOf(Prefs.apiId != 0 && Prefs.apiHash.isNotBlank()) }
     when {
         !temApi -> SetupScreen(onDone = { temApi = true })
-        auth is TdApi.AuthorizationStateReady -> HomeScreen()
+        auth is TdApi.AuthorizationStateReady -> AppShell()
         else -> LoginScreen(auth, onChangeApi = { temApi = false })
     }
 }

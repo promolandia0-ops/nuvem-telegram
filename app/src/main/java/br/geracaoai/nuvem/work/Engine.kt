@@ -1,6 +1,7 @@
 package br.geracaoai.nuvem.work
 
 import android.content.Context
+import br.geracaoai.nuvem.data.CloudIndex
 import br.geracaoai.nuvem.data.DiagLog
 import br.geracaoai.nuvem.data.Hash
 import br.geracaoai.nuvem.data.HashCache
@@ -99,6 +100,7 @@ object Engine {
             fail("Falhou: ${e.message ?: e.javaClass.simpleName}")
         } finally {
             HashCache.save()
+            CloudIndex.flush()
             set(_state.value.copy(running = false, paused = false, phase = "", current = ""))
             Sched.clearProgress(ctx)
             lock.unlock()
@@ -128,12 +130,15 @@ object Engine {
             all.filterNot { Library.isIcon(it.path, it.name, it.size, it.mime) }
         }
         DiagLog.log("BACKUP", "aparelho: ${all.size} arquivos, ${all.size - files.size} ícones ou miniaturas deixados de fora")
+        Prefs.lastLocal = files.size
 
         // 2) O que já está na nuvem, pelas legendas de todos os destinos.
         update { it.copy(phase = "Lendo a nuvem", message = "Conferindo o que já está no Telegram…") }
         var cloud: List<CloudRec> = withContext(Dispatchers.IO) { Tg.scanCloud(chats) }
         if (!Prefs.iconsPurged) cloud = purgeIcons(cloud)
         val cloudHashes = HashSet(cloud.map { it.meta.hash })
+        CloudIndex.replace(cloud)
+        Prefs.lastCloud = cloudHashes.size
         DiagLog.log("BACKUP", "nuvem: ${cloud.size} mensagens, ${cloudHashes.size} arquivos diferentes")
         if (stopReq) {
             update { it.copy(message = "Parado.") }
@@ -208,9 +213,10 @@ object Engine {
                 continue
             }
             try {
-                val meta = Meta(hash, f.size, f.taken, f.name, f.mime, f.bucket, f.path, original = true)
-                val ok = sendWithRetry(chat, file, meta.toCaption())
-                if (!ok) break
+                val dur = if (f.mime.startsWith("video/")) withContext(Dispatchers.IO) { Library.videoSeconds(f.path) } else 0
+                val meta = Meta(hash, f.size, f.taken, f.name, f.mime, f.bucket, f.path, original = true, duration = dur)
+                val id = sendWithRetry(chat, file, meta.toCaption()) ?: break
+                CloudIndex.add(listOf(CloudRec(chat, id, meta)))
                 sent++
                 failsInRow = 0
                 cloudHashes.add(hash)
@@ -265,15 +271,14 @@ object Engine {
 
     /**
      * Tenta enviar. Espera quando o Telegram pede pausa (FLOOD_WAIT) e tenta de novo em erros passageiros.
-     * Retorna false se o usuário parou no meio.
+     * Retorna o id da mensagem enviada, ou null se o usuário parou no meio.
      */
-    private suspend fun sendWithRetry(chat: Long, file: File, legenda: String): Boolean {
+    private suspend fun sendWithRetry(chat: Long, file: File, legenda: String): Long? {
         var tentativas = 0
         while (true) {
-            if (stopReq) return false
+            if (stopReq) return null
             try {
-                Tg.upload(chat, file, legenda)
-                return true
+                return Tg.upload(chat, file, legenda)
             } catch (e: TdException) {
                 val espera = esperaDoTelegram(e.message)
                 if (espera != null) {

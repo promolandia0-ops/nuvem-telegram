@@ -3,6 +3,7 @@ package br.geracaoai.nuvem
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import br.geracaoai.nuvem.data.CloudIndex
 import br.geracaoai.nuvem.data.DiagLog
 import br.geracaoai.nuvem.data.Prefs
 import br.geracaoai.nuvem.tg.Td
@@ -17,6 +18,7 @@ class App : Application() {
         super.onCreate()
         instance = this
         Prefs.init(this)
+        CloudIndex.init(this)
         DiagLog.init(this)
         val antes = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->

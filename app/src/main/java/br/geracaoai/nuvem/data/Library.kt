@@ -39,6 +39,19 @@ object Library {
         }
     }
 
+    /** Duração de um vídeo do celular, em segundos (0 se não der para ler). */
+    fun videoSeconds(path: String): Int {
+        val r = android.media.MediaMetadataRetriever()
+        return try {
+            r.setDataSource(path)
+            ((r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000L).toInt()
+        } catch (_: Exception) {
+            0
+        } finally {
+            r.release()
+        }
+    }
+
     /** Caminho com pasta escondida (nome começa com ponto), como .thumbnails: fica de fora. */
     fun hidden(path: String): Boolean = path.split('/').any { it.length > 1 && it.startsWith(".") }
 

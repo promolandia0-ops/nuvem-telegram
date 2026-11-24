@@ -12,7 +12,10 @@ data class Meta(
     val folder: String,
     val path: String,
     val original: Boolean = true,
+    val duration: Int = 0,
 ) {
+    val isVideo: Boolean get() = mime.startsWith("video/")
+
     fun toCaption(): String {
         val j = JSONObject()
             .put("h", hash)
@@ -23,6 +26,7 @@ data class Meta(
             .put("f", folder)
             .put("p", path.take(300))
         if (original) j.put("k", "orig")
+        if (duration > 0) j.put("d", duration)
         return "$name\n$TAG$j"
     }
 
@@ -47,6 +51,7 @@ data class Meta(
                     j.optString("f"),
                     j.optString("p"),
                     j.optString("k") == "orig",
+                    j.optInt("d"),
                 )
             } catch (_: Exception) {
                 null
