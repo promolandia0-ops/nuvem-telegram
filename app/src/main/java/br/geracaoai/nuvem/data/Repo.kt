@@ -860,7 +860,10 @@ object Repo {
 
     /** Itens da pasta pra tela de Liberar: locais (salvos ou não) + só na nuvem. Só lê o banco local. */
     fun folderMedia(c: Context, bucket: String): List<FolderMediaItem> {
-        val local = LocalMedia.inBucket(c, bucket)
+        // Modo tudo: pasta sem nome (bucket "") não existe no MediaStore como filtro; usa a varredura completa.
+        val local = if (Prefs.backupAll) MediaScan.allAnywhere(c).filter { it.bucket == bucket }
+            .sortedWith(compareBy<LocalItem> { it.taken }.thenBy { it.mediaId })
+            else LocalMedia.inBucket(c, bucket)
         val cloud = Db.allCloudMany(Prefs.galleryChats()).filter { it.folder == bucket }
         return FolderMedia.merge(local, cloud) { i -> Db.cachedHash(i.path, i.size, i.mtime) }
     }

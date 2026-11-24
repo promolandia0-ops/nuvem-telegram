@@ -98,6 +98,8 @@ object Backup {
     }
 
     fun runNow(c: Context, ignoreConstraints: Boolean = false, expedited: Boolean = false) {
+        // Toque do usuário (Iniciar/Sim/Retomar) tira a pausa e sempre começa.
+        if (ignoreConstraints) Prefs2.backupPaused = false
         if (Prefs2.backupPaused) return
         // Automático: não empilha se já roda. Manual (Iniciar): sempre começa, trocando um run preso.
         if (!ignoreConstraints && isWorkRunning(c)) return
@@ -190,11 +192,19 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     override suspend fun doWork(): Result {
         Td.init(applicationContext)
         keep.acquire()
-        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) || Prefs2.backupPaused) {
+        if (Prefs2.backupPaused) { keep.release(); return Result.success() }
+        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty())) {
+            Prefs.lastError = "Escolha o chat do Telegram em Ajustes para o backup começar."
             keep.release(); return Result.success()
         }
-        if (!Td.awaitReady()) { keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry() }
-        if (!Backup.tryStart()) { keep.release(); Backup.continueSoon(applicationContext, 1); return Result.success() }
+        if (!Td.awaitReady()) {
+            Prefs.lastError = "Telegram ainda não conectou. Tentando de novo."
+            keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry()
+        }
+        if (!Backup.tryStart()) {
+            Prefs.lastError = "Outro backup ainda está terminando. Começa logo em seguida."
+            keep.release(); Backup.continueSoon(applicationContext, 1); return Result.success()
+        }
         return try {
             startForegroundSafe()
             runBackup()
