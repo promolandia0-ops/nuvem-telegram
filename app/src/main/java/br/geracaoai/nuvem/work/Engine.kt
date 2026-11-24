@@ -120,6 +120,10 @@ object Engine {
         // 1) Tudo que está no aparelho, sem ícones e miniaturas.
         update { it.copy(phase = "Lendo o aparelho", message = "Procurando fotos e vídeos em todo o aparelho…") }
         val all = withContext(Dispatchers.IO) { Library.scan(ctx) }
+        if (all.isEmpty()) {
+            fail("Não encontrei fotos ou vídeos. Confira se o app tem permissão de fotos e vídeos nas configurações do celular.")
+            return
+        }
         val files = withContext(Dispatchers.IO) {
             all.filterNot { Library.isIcon(it.path, it.name, it.size, it.mime) }
         }
