@@ -28,9 +28,24 @@ object MediaScan {
     @Synchronized
     fun allAnywhere(c: Context): List<LocalItem> {
         cached?.let { if (System.currentTimeMillis() - it.first < 10 * 60_000L) return it.second }
-        val list = scanAll(c)
+        val list = scanAll(c).filterNot { isIcon(it) }
         cached = System.currentTimeMillis() to list
         return list
+    }
+
+    private val ICON_NAME = Regex("(^|[_\\-. ])(icon|icons|ic_|ic-|launcher|logo|avatar|emoji|sticker)", RegexOption.IGNORE_CASE)
+    private val JUNK_PATH = Regex("/(\\.cache|cache|\\.trash|\\.trashed-[^/]*|icons?|app_icons?|\\.icons?|Android/data)(/|$)", RegexOption.IGNORE_CASE)
+
+    /** Ícone de app, logo, cache ou imagem pequena quadrada: não é foto/vídeo de família. */
+    fun isIcon(it: LocalItem): Boolean {
+        if (JUNK_PATH.containsMatchIn(it.path) || ICON_NAME.containsMatchIn(it.name)) return true
+        if (it.mime.startsWith("video")) return false
+        if (it.size > 1_500_000L) return false
+        return try {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(it.path, o)
+            o.outWidth > 0 && o.outHeight > 0 && o.outWidth == o.outHeight && o.outWidth <= 1024
+        } catch (_: Exception) { false }
     }
 
     private fun scanAll(c: Context): List<LocalItem> {
