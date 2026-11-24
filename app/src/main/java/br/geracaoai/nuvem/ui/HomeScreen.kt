@@ -246,7 +246,7 @@ fun BackupScreen(
             },
             onSeeNew = { onBrowseFolder(summary?.folders?.firstOrNull { it.newCount > 0 }?.folder ?: (Prefs.folders + Prefs.secretFolders).firstOrNull().orEmpty()) },
             onFree = { confirmFree = true },
-            onSeeFree = { showFree = true },
+            onSeeFree = { br.geracaoai.nuvem.work.FreeAsk.request.value = true },
         ) }
         item(key = "batt") { SamsungBatteryCard() }
         item(key = "fail") { FailedUploadsCard() }
@@ -257,7 +257,7 @@ fun BackupScreen(
                     onFotos = { onFotos(null, false) },
                     onVideos = { onFotos(null, true) },
                     onRestore = { showRestore = true },
-                    onFree = { showFree = true },
+                    onFree = { br.geracaoai.nuvem.work.FreeAsk.request.value = true },
                     onDups = { showDups = true },
                     onSettings = { onSettings() },
                 )

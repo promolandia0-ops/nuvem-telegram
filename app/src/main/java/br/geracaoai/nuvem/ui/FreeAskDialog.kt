@@ -41,7 +41,7 @@ fun FreeAskDialog() {
         if (req && !loaded) {
             items = withContext(Dispatchers.IO) { try { Repo.freeableQuick(ctx).items } catch (_: Exception) { emptyList() } }
             loaded = true
-            if (items.isEmpty()) close()
+            if (items.isEmpty()) { msg = "Nada para liberar agora. Só sai do celular o que já foi conferido no Telegram."; close() }
         }
     }
 
