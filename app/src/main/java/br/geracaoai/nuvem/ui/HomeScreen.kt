@@ -263,16 +263,16 @@ fun BackupScreen(
                 )
             }
         }
-        item(key = "fh") {
+        if (!Prefs.backupAll) item(key = "fh") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SectionTitle("Pastas", Modifier.weight(1f))
                 TextButton({ showFolders = !showFolders }) { Text(if (showFolders) "Recolher" else "Gerenciar") }
             }
         }
-        if (loading && folders.isEmpty()) {
+        if (!Prefs.backupAll && loading && folders.isEmpty()) {
             items(3, key = { "sk$it" }) { ShimmerBlock(Modifier.fillMaxWidth().height(88.dp)) }
         }
-        itemsIndexed(folders.filter { it.included || showFolders }, key = { _, f -> f.name }) { i, f ->
+        if (!Prefs.backupAll) itemsIndexed(folders.filter { it.included || showFolders }, key = { _, f -> f.name }) { i, f ->
             BackupFolderCard(f, Modifier.animateItem(fadeInSpec = spring(stiffness = Spring.StiffnessMediumLow)), onOpen = { if (FolderMedia.hasBackup(f.included, f.cloudCount)) onBrowseFolder(f.name) else onFotos(f.name, false) }, onToggle = {
                 sel = if (f.name in sel) sel - f.name else sel + f.name; save()
             }, onSecret = {
@@ -281,8 +281,14 @@ fun BackupScreen(
                 if (f.name !in sel && f.name in next) { sel = sel + f.name; save() }
             }, showManage = showFolders)
         }
-        if (folders.none { it.included } && !loading) {
+        if (!Prefs.backupAll && folders.none { it.included } && !loading) {
             item(key = "emptyf") { EmptyCloud("Nenhuma pasta escolhida", "Toque em Gerenciar e escolha Câmera, WhatsApp, Capturas…") }
+        }
+        if (Prefs.backupAll) item(key = "allon") {
+            GlassCard(padding = 16.dp) {
+                Text("Backup de tudo: ligado", style = MaterialTheme.typography.titleMedium)
+                Text("Todas as fotos e vídeos do celular entram no backup. Você não precisa escolher pasta.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         item(key = "opts") {
             GlassCard(onClick = { showOpts = !showOpts }, padding = 16.dp) {
