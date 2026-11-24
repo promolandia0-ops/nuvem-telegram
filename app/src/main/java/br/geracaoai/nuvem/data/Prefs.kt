@@ -72,6 +72,7 @@ object Prefs2 {
     var watchedPaused: Boolean get() = p.getBoolean("wpaused", false); set(v) = p.edit().putBoolean("wpaused", v).commit().let {}
     var watchedEnabled: Boolean get() = p.getBoolean("wenabled", false); set(v) = p.edit().putBoolean("wenabled", v).apply()
     var watchedTree: String get() = p.getString("wtree", "")!!; set(v) = p.edit().putString("wtree", v).apply()
+    var iconsPurged: Boolean get() = p.getBoolean("icons_purged", false); set(v) = p.edit().putBoolean("icons_purged", v).apply()
     var watchedLast: Long get() = p.getLong("wlast", 0); set(v) = p.edit().putLong("wlast", v).apply()
     var watchedError: String get() = p.getString("werr", "")!!; set(v) = p.edit().putString("werr", v).apply()
     var batteryGuideDismissed: Boolean get() = p.getBoolean("batt_guide_done", false); set(v) = p.edit().putBoolean("batt_guide_done", v).apply()

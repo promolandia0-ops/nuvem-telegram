@@ -1052,6 +1052,23 @@ object Repo {
         return Td.send(TdApi.DownloadFile(f.id, 32, 0, 0, true), 0).local.path.ifBlank { null }
     }
 
+    /** Uma vez: apaga da nuvem os ícones/logos que já subiram. Só mexe se o arquivo original ainda está no aparelho. */
+    suspend fun purgeIconsOnce(c: Context): Int = withContext(Dispatchers.IO) {
+        if (Prefs2.iconsPurged || !Td.ready || Prefs.chatId == 0L) return@withContext 0
+        val junk = Db.allCloudMany(Prefs.allKnownChats()).filter { ci ->
+            File(ci.path).isFile && MediaScan.isIconFile(ci.path, ci.name, ci.size, ci.mime)
+        }
+        var n = 0
+        for ((chat, items) in junk.groupBy { it.chatId }) for (chunk in items.chunked(100)) {
+            try { Td.send(TdApi.DeleteMessages(chat, chunk.map { it.msgId }.toLongArray(), true), 30_000) } catch (_: Exception) { continue }
+            chunk.forEach { Db.deleteCloud(chat, it.msgId) }
+            n += chunk.size
+        }
+        Prefs2.iconsPurged = true
+        if (n > 0) ActionLog.add("ícones", "Apaguei $n ícones e logos da nuvem", n, 0)
+        n
+    }
+
     suspend fun deleteFromCloud(ci: CloudItem) {
         val orig = originalItem(ci)
         val ids = if (orig != null) longArrayOf(ci.msgId, orig.msgId) else longArrayOf(ci.msgId)

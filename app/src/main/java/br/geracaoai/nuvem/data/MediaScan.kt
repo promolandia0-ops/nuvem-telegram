@@ -37,13 +37,15 @@ object MediaScan {
     private val JUNK_PATH = Regex("/(\\.cache|cache|\\.trash|\\.trashed-[^/]*|icons?|app_icons?|\\.icons?|Android/data)(/|$)", RegexOption.IGNORE_CASE)
 
     /** Ícone de app, logo, cache ou imagem pequena quadrada: não é foto/vídeo de família. */
-    fun isIcon(it: LocalItem): Boolean {
-        if (JUNK_PATH.containsMatchIn(it.path) || ICON_NAME.containsMatchIn(it.name)) return true
-        if (it.mime.startsWith("video")) return false
-        if (it.size > 1_500_000L) return false
+    fun isIcon(it: LocalItem): Boolean = isIconFile(it.path, it.name, it.size, it.mime)
+
+    fun isIconFile(path: String, name: String, size: Long, mime: String): Boolean {
+        if (JUNK_PATH.containsMatchIn(path) || ICON_NAME.containsMatchIn(name)) return true
+        if (mime.startsWith("video")) return false
+        if (size > 1_500_000L) return false
         return try {
             val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            android.graphics.BitmapFactory.decodeFile(it.path, o)
+            android.graphics.BitmapFactory.decodeFile(path, o)
             o.outWidth > 0 && o.outHeight > 0 && o.outWidth == o.outHeight && o.outWidth <= 1024
         } catch (_: Exception) { false }
     }

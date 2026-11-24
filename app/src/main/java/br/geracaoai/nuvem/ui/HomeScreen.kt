@@ -121,6 +121,10 @@ fun BackupScreen(
         Backup.schedule(ctx)
     }
 
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { try { Repo.purgeIconsOnce(ctx) } catch (_: Exception) {} }
+    }
+
     val life = LocalLifecycleOwner.current
     DisposableEffect(life) {
         val obs = LifecycleEventObserver { _, e ->
@@ -593,7 +597,11 @@ fun DiscoverCards(
     }
     if (s.newCount > 0 && !running) {
         GlassCard(radius = 24.dp, padding = 16.dp) {
-            Text("${s.newCount} arquivos novos encontrados (${fmtBytes(s.newBytes)}). Fazer backup de todos?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            val noAparelho = s.folders.sumOf { it.diskCount }
+            val bytesAparelho = s.folders.sumOf { it.diskBytes }
+            Text("No aparelho: $noAparelho fotos e vídeos (${fmtBytes(bytesAparelho)}).", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Text("Faltam subir ${s.newCount} (${fmtBytes(s.newBytes)}). Fazer backup?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PillButton("Sim", Icons.Rounded.CloudUpload, { onBackupAll(s.newFiles) }, Modifier.weight(1f))
