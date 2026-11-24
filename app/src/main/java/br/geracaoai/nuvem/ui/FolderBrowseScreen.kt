@@ -425,6 +425,11 @@ fun FreeFoldersSheet(
             onOpenFolder = { onOpenFolder(it); onClose() },
             modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp).testTag(FeatureTags.PANE_LIBERAR),
         )
+        Button(
+            onClick = { br.geracaoai.nuvem.work.FreeAsk.request.value = true; onClose() },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        ) { Text("Selecionar tudo e liberar") }
+        Text("Confere cada arquivo no Telegram e mostra quanto vai liberar antes de você confirmar.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         Spacer(Modifier.height(16.dp))
     }
 }
