@@ -61,7 +61,7 @@ object Backup {
         if (runningInProcess()) return true
         return try {
             val wm = WorkManager.getInstance(c)
-            uniqueNames().flatMap { wm.getWorkInfosForUniqueWork(it).get() }
+            uniqueNames().flatMap { wm.getWorkInfosForUniqueWork(it).get(2, TimeUnit.SECONDS) }
                 .any { it.state == WorkInfo.State.RUNNING }
         } catch (_: Exception) { false }
     }
@@ -69,7 +69,7 @@ object Backup {
     fun schedule(c: Context) {
         val wm = WorkManager.getInstance(c)
         if (!Prefs.autoBackup || Prefs2.backupPaused) { wm.cancelUniqueWork(PERIODIC); return }
-        val running = try { wm.getWorkInfosForUniqueWork(PERIODIC).get().any { it.state == WorkInfo.State.RUNNING } } catch (_: Exception) { false }
+        val running = try { wm.getWorkInfosForUniqueWork(PERIODIC).get(2, TimeUnit.SECONDS).any { it.state == WorkInfo.State.RUNNING } } catch (_: Exception) { false }
         wm.enqueueUniquePeriodicWork(
             PERIODIC,
             if (running) ExistingPeriodicWorkPolicy.KEEP else ExistingPeriodicWorkPolicy.UPDATE,
