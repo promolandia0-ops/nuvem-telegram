@@ -13,6 +13,7 @@ import br.geracaoai.nuvem.work.Backup
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        br.geracaoai.nuvem.data.NuvemDiag.start(this)
         Prefs.init(this)
         Db.init(this)
         // leituras de registros fora da thread da tela (antes travavam a abertura e geravam "não está respondendo")
