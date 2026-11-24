@@ -916,7 +916,7 @@ object Repo {
      */
     suspend fun reconcileCloud(force: Boolean = false, onProgress: ((Int, Int) -> Unit)? = null): Int = withContext(Dispatchers.IO) {
         reconcileLock.withLock {
-            if (!force && lastReconcileAt != 0L && System.currentTimeMillis() - lastReconcileAt < 8_000L) return@withLock 0
+            if (!force && lastReconcileAt != 0L && System.currentTimeMillis() - lastReconcileAt < 30 * 60_000L) return@withLock 0
             if (Prefs.allKnownChats().isEmpty()) { lastReconcileAt = System.currentTimeMillis(); return@withLock 0 }
             var removed = 0
             for (chat in Prefs.allKnownChats()) {

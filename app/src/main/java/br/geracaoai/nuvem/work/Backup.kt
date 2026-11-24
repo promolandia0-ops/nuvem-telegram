@@ -238,7 +238,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             }
         }
         report(0, 0, "Conferindo o que está no Telegram…", 0)
-        try { Repo.reconcileCloud(force = true) { done, tot -> report(done, tot, "Conferindo o Telegram… $done/$tot", 0) } } catch (_: Exception) {}
+        try { Repo.reconcileCloud() { done, tot -> report(done, tot, "Conferindo o Telegram… $done/$tot", 0) } } catch (_: Exception) {}
 
         val max = Meta.maxSize(Td.isPremium.value)
         val allByBucket: Map<String, List<LocalItem>> by lazy { MediaScan.allAnywhere(applicationContext).groupBy { it.bucket } }

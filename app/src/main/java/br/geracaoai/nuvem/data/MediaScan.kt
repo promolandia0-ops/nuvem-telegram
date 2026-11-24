@@ -19,7 +19,18 @@ object MediaScan {
         return parts.dropLast(1).any { isThumbDir(it) } || isThumbFile(parts.last())
     }
 
+    private var cached: Pair<Long, List<LocalItem>>? = null
+
+    /** Guarda o resultado por 10 min: cada backup (inclusive o instantâneo) não relê o celular inteiro. */
+    @Synchronized
     fun allAnywhere(c: Context): List<LocalItem> {
+        cached?.let { if (System.currentTimeMillis() - it.first < 10 * 60_000L) return it.second }
+        val list = scanAll(c)
+        cached = System.currentTimeMillis() to list
+        return list
+    }
+
+    private fun scanAll(c: Context): List<LocalItem> {
         val byPath = LinkedHashMap<String, LocalItem>()
         try { LocalMedia.all(c).forEach { if (!isThumbPath(it.path)) byPath[it.path] = it } } catch (_: Exception) {}
         for (root in LocalMedia.storageRoots()) walk(root, byPath)
