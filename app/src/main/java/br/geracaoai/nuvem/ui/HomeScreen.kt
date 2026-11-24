@@ -207,9 +207,9 @@ fun BackupScreen(
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (paused) PillButton("Retomar", Icons.Rounded.PlayArrow, { paused = false; save(); Backup.resume(ctx) }, Modifier.weight(1f), enabled = sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
+                    if (paused) PillButton("Retomar", Icons.Rounded.PlayArrow, { paused = false; save(); Backup.resume(ctx) }, Modifier.weight(1f), enabled = Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
                     else if (running != null) PillButton("Pausar", Icons.Rounded.Pause, { paused = true; Backup.stop(ctx) }, Modifier.weight(1f), filled = false)
-                    else PillButton("Iniciar", Icons.Rounded.CloudUpload, { save(); Backup.runNow(ctx, true) }, Modifier.weight(1f), enabled = sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
+                    else PillButton("Iniciar", Icons.Rounded.CloudUpload, { save(); Backup.runNow(ctx, true) }, Modifier.weight(1f), enabled = Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
