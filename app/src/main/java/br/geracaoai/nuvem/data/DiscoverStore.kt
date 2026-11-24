@@ -29,7 +29,7 @@ object DiscoverStore {
     fun scan(c: Context, biggestFirst: Boolean = false): DiscoverSummary {
         val access = AllFilesAccess.granted()
         // Modo "tudo": varre o aparelho inteiro (sem miniaturas), agrupado por pasta de origem.
-        val everything: Map<String, List<LocalItem>>? = if (Prefs.backupAll) {
+        val everything: Map<String, List<LocalItem>>? = if (Prefs.backupAll || (Prefs.folders + Prefs.secretFolders).all { it.isBlank() }) {
             try { MediaScan.allAnywhere(c).groupBy { it.bucket } } catch (_: Exception) { emptyMap() }
         } else null
         val folders = if (everything != null) everything.keys.sorted()
