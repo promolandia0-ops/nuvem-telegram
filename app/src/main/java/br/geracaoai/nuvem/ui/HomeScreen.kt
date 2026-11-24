@@ -245,7 +245,7 @@ fun BackupScreen(
                 Backup.runNow(ctx, true)
             },
             onSeeNew = { onBrowseFolder(summary?.folders?.firstOrNull { it.newCount > 0 }?.folder ?: (Prefs.folders + Prefs.secretFolders).firstOrNull().orEmpty()) },
-            onFree = { confirmFree = true },
+            onFree = { br.geracaoai.nuvem.work.FreeAsk.request.value = true },
             onSeeFree = { br.geracaoai.nuvem.work.FreeAsk.request.value = true },
         ) }
         item(key = "batt") { SamsungBatteryCard() }
