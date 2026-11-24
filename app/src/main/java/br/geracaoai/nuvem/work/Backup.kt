@@ -99,7 +99,10 @@ object Backup {
 
     fun runNow(c: Context, ignoreConstraints: Boolean = false, expedited: Boolean = false) {
         // Toque do usuário (Iniciar/Sim/Retomar) tira a pausa e sempre começa.
-        if (ignoreConstraints) Prefs2.backupPaused = false
+        if (ignoreConstraints) {
+            Prefs2.backupPaused = false
+            gate.set(false) // trava presa de um run antigo: o toque do usuário solta e recomeça
+        }
         if (Prefs2.backupPaused) return
         // Automático: não empilha se já roda. Manual (Iniciar): sempre começa, trocando um run preso.
         if (!ignoreConstraints && isWorkRunning(c)) return
