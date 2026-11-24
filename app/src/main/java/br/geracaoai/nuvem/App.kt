@@ -11,8 +11,11 @@ import br.geracaoai.nuvem.tg.Td
 import br.geracaoai.nuvem.work.Backup
 
 class App : Application() {
+    companion object { lateinit var instance: App }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         Prefs.init(this)
         br.geracaoai.nuvem.data.DiagLog.init(this)
         val prevHandler = Thread.getDefaultUncaughtExceptionHandler()

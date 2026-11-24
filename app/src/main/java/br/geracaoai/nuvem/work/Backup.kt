@@ -351,7 +351,10 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         for (i in items) {
                             if (isStopped || Prefs2.backupPaused) break
                             coroutineContext.ensureActive()
-                            val h = try { Repo.localHash(i) } catch (_: Exception) { "" }
+                            val h = try { Repo.localHash(i) } catch (e: Exception) {
+                                DiagLog.log("HASH", "não consegui ler o arquivo, pulado: ${i.path}", e)
+                                ""
+                            }
                             val existing = BackupDiff.isUploaded(i.path, i.size, h, cloudIndex) ||
                                 (h.isNotBlank() && !Dedup.claimHash(seen, h, i.size))
                             if (existing || h.isBlank()) {

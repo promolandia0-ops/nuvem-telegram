@@ -29,6 +29,25 @@ object Hash {
         return "q:" + md.digest().joinToString("") { "%02x".format(it) }
     }
 
+    /** Mesmo hash de quick(), mas lendo pelo Android (URI do MediaStore). Serve quando o caminho direto falha. */
+    fun quickUri(c: android.content.Context, uri: android.net.Uri, size: Long): String {
+        if (size <= 0L) return fingerprint(0L, ByteArray(0), ByteArray(0))
+        c.contentResolver.openFileDescriptor(uri, "r")!!.use { pfd ->
+            java.io.FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                fun readAt(pos: Long, n: Int): ByteArray {
+                    val buf = ByteBuffer.allocate(n)
+                    ch.position(pos)
+                    while (buf.hasRemaining()) { if (ch.read(buf) < 0) break }
+                    return buf.array()
+                }
+                val head = readAt(0, min(QUICK_WINDOW.toLong(), size).toInt())
+                if (size <= QUICK_WINDOW) return fingerprint(size, head, ByteArray(0))
+                val tail = readAt(size - min(QUICK_WINDOW.toLong(), size).toInt(), min(QUICK_WINDOW.toLong(), size).toInt())
+                return fingerprint(size, head, tail)
+            }
+        }
+    }
+
     fun quick(file: File): String {
         val size = file.length()
         if (size <= 0L) return fingerprint(0L, ByteArray(0), ByteArray(0))

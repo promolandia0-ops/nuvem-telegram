@@ -317,7 +317,10 @@ object Repo {
             Db.cacheHash(i.path, i.size, i.mtime, h)
             return h
         }
-        val h = Hash.quick(File(i.path))
+        val h = try { Hash.quick(File(i.path)) } catch (e: Exception) {
+            DiagLog.log("HASH", "leitura direta falhou, tentando pelo Android: ${i.name}", e)
+            Hash.quickUri(br.geracaoai.nuvem.App.instance, i.uri, i.size)
+        }
         Db.cacheHash(i.path, i.size, i.mtime, h)
         if (i.mediaId > 0) Db.cacheHash("mid:${i.mediaId}", i.size, i.mtime, h)
         return h
