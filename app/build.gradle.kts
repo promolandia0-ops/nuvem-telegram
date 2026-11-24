@@ -4,16 +4,15 @@ val ks = Properties().apply { val f = rootProject.file("keystore/keystore.proper
 android {
   namespace = "br.geracaoai.nuvem"
   compileSdk = 35
-  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 17 + (project.findProperty("vcRun")?.toString()?.toIntOrNull() ?: 0) - 1; versionName = "1.8.0"
+  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 17 + (project.findProperty("vcRun")?.toString()?.toIntOrNull() ?: 0) - 1; versionName = "2.0.0"
     ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } }
   signingConfigs { create("ci") { storeFile = rootProject.file("ci-debug.keystore"); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android" }; create("release") { if (ks.isNotEmpty()) { storeFile = rootProject.file(ks["storeFile"] as String); storePassword = ks["storePassword"] as String; keyAlias = ks["keyAlias"] as String; keyPassword = ks["keyPassword"] as String } } }
   buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("ci") }; release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); signingConfig = signingConfigs.getByName("release") } }
   compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
   kotlinOptions { jvmTarget = "17" }
-  buildFeatures { compose = true; buildConfig = true; aidl = true }
+  buildFeatures { compose = true; buildConfig = true }
   packaging { jniLibs { useLegacyPackaging = false } }
   lint { checkReleaseBuilds = false; abortOnError = false }
-  testOptions { unitTests { isIncludeAndroidResources = true; isReturnDefaultValues = true } }
 }
 dependencies {
   val bom = platform("androidx.compose:compose-bom:2024.09.00")
@@ -25,21 +24,6 @@ dependencies {
   implementation("androidx.core:core-ktx:1.13.1")
   implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
   implementation("androidx.work:work-runtime-ktx:2.9.1")
-  implementation("androidx.media3:media3-exoplayer:1.4.1")
-  implementation("androidx.media3:media3-ui:1.4.1")
-  implementation("io.coil-kt:coil-compose:2.7.0")
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
   implementation("io.github.tdlib-android:core:0.1.1")
-  implementation("dev.rikka.shizuku:api:13.1.5")
-  implementation("dev.rikka.shizuku:provider:13.1.5")
-  implementation("androidx.documentfile:documentfile:1.0.1")
-  implementation("androidx.biometric:biometric:1.1.0")
-  implementation("androidx.fragment:fragment-ktx:1.8.5")
-  testImplementation("junit:junit:4.13.2")
-  testImplementation("org.json:json:20240303")
-  testImplementation(bom)
-  testImplementation("androidx.compose.ui:ui-test-junit4")
-  testImplementation("org.robolectric:robolectric:4.14.1")
-  testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
-  debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

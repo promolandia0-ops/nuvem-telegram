@@ -1,7 +1,7 @@
 name: build
 on:
   push:
-    branches: [nuvem-v2]
+    branches: [nuvem-v2, nuvem-v3]
   workflow_dispatch:
 permissions:
   contents: write

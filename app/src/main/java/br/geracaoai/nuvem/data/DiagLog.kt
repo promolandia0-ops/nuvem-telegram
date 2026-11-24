@@ -1,81 +1,58 @@
 package br.geracaoai.nuvem.data
 
 import android.content.Context
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
-import br.geracaoai.nuvem.tg.Td
-import br.geracaoai.nuvem.work.Backup
+import android.os.Build
+import android.os.Environment
+import br.geracaoai.nuvem.BuildConfig
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
-/** Diário de erros e eventos do app. Aparece em Ajustes › Diagnóstico do app para copiar e mandar. */
+/** Diário do app: o que o backup fez e os erros. Fica no celular; a tela de diagnóstico copia tudo. */
 object DiagLog {
-    private const val MAX = 500
-    private val lines = ArrayDeque<String>()
+    private const val KEEP_LINES = 400
+    private const val MAX_BYTES = 200_000L
     private var file: File? = null
-    private var writes = 0
-    private val fmt = java.text.SimpleDateFormat("dd/MM HH:mm:ss", Locale.US)
+    private val lock = Any()
+    private val fmt = SimpleDateFormat("dd/MM HH:mm:ss", Locale.forLanguageTag("pt-BR"))
 
-    @Synchronized
     fun init(c: Context) {
         file = File(c.filesDir, "diag.log")
-        try { file?.readLines()?.takeLast(MAX)?.forEach { lines.addLast(it) } } catch (_: Exception) {}
     }
 
-    @Synchronized
-    fun log(tag: String, msg: String, t: Throwable? = null) {
-        val body = buildString {
-            append(msg)
-            if (t != null) {
-                append(" | ").append(t.javaClass.simpleName).append(": ").append(t.message ?: "")
-                t.stackTrace.take(6).forEach { append("\n    at ").append(it) }
+    fun log(tag: String, msg: String) {
+        val f = file ?: return
+        val linha = "${fmt.format(Date())} [$tag] ${msg.replace('\n', ' ')}\n"
+        synchronized(lock) {
+            try {
+                f.appendText(linha)
+                if (f.length() > MAX_BYTES) {
+                    f.writeText(f.readLines().takeLast(KEEP_LINES / 2).joinToString("\n", postfix = "\n"))
+                }
+            } catch (_: Exception) {
             }
         }
-        val line = "${fmt.format(Date())} [$tag] $body"
-        lines.addLast(line)
-        while (lines.size > MAX) lines.removeFirst()
+    }
+
+    fun tail(n: Int = KEEP_LINES): String = synchronized(lock) {
         try {
-            val f = file ?: return
-            writes++
-            if (writes % 100 == 0) f.writeText(lines.joinToString("\n") + "\n")
-            else f.appendText(line + "\n")
-        } catch (_: Exception) {}
+            file?.takeIf { it.exists() }?.readLines()?.takeLast(n)?.joinToString("\n") ?: ""
+        } catch (_: Exception) {
+            ""
+        }
     }
 
-    @Synchronized
-    fun tail(n: Int = 300): String = lines.toList().takeLast(n).joinToString("\n")
-
-    fun report(c: Context): String {
-        val sb = StringBuilder()
-        val ver = try { c.packageManager.getPackageInfo(c.packageName, 0).versionName } catch (_: Exception) { "?" }
-        sb.append("NUVEM – DIAGNÓSTICO\n")
-        sb.append("Gerado: ").append(fmt.format(Date())).append('\n')
-        sb.append("App: ").append(ver).append('\n')
-        sb.append("Aparelho: ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
-            .append(", Android ").append(android.os.Build.VERSION.RELEASE).append('\n')
-        sb.append("Chat do Telegram definido: ").append(Prefs.chatId != 0L).append('\n')
-        sb.append("Backup de tudo: ").append(Prefs.backupAll).append(" | Automático: ").append(Prefs.autoBackup).append('\n')
-        sb.append("Pausado: ").append(Prefs2.backupPaused).append(" | Trava de backup ocupada: ").append(Backup.runningInProcess()).append('\n')
-        sb.append("Telegram pronto: ").append(Td.ready).append(" | Estado: ").append(Td.auth.value?.javaClass?.simpleName ?: "nenhum").append('\n')
-        sb.append("Acesso a todos os arquivos: ").append(AllFilesAccess.granted()).append('\n')
-        sb.append("Último erro salvo: ").append(Prefs.lastError.ifBlank { "nenhum" }).append('\n')
-        sb.append("Trabalhos (NOW/PERIODIC/CONTINUE): ").append(workStates(c)).append('\n')
-        sb.append("\n--- Últimas ações ---\n")
-        ActionLog.recent(15).forEach { e ->
-            sb.append(fmt.format(Date(e.at))).append(' ').append(e.action).append(": ").append(e.detail).append('\n')
+    /** Texto completo para copiar: versão, aparelho, estado do backup e o diário. */
+    fun report(extra: String): String {
+        val acesso = try { Environment.isExternalStorageManager() } catch (_: Throwable) { false }
+        return buildString {
+            append("NUVEM ${BuildConfig.VERSION_NAME}\n")
+            append("Aparelho: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}\n")
+            append("Acesso a todos os arquivos: $acesso\n")
+            append(extra)
+            append("\n--- diário ---\n")
+            append(tail(300))
         }
-        sb.append("\n--- Eventos e erros ---\n")
-        sb.append(tail(300)).append('\n')
-        return sb.toString()
     }
-
-    private fun workStates(c: Context): String = try {
-        val wm = WorkManager.getInstance(c)
-        listOf(Backup.NOW, Backup.PERIODIC, Backup.CONTINUE).joinToString(" | ") { n ->
-            val infos: List<WorkInfo> = wm.getWorkInfosForUniqueWork(n).get(2, TimeUnit.SECONDS)
-            infos.lastOrNull()?.state?.name ?: "nenhum"
-        }
-    } catch (e: Exception) { "erro ao ler: ${e.javaClass.simpleName}" }
 }

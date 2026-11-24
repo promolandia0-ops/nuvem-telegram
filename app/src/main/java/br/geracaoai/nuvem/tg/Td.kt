@@ -4,11 +4,10 @@ import android.content.Context
 import android.os.Build
 import br.geracaoai.nuvem.data.Prefs
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.drinkless.tdlib.Client
@@ -23,17 +22,13 @@ class TdException(val code: Int, msg: String) : Exception(msg)
 /** Resultado final do envio de uma mensagem (sucesso ou falha). */
 class SendResult(val message: TdApi.Message?, val error: TdApi.Error?)
 
+/** Ponte com o TDLib, a biblioteca oficial do Telegram. */
 object Td {
     private lateinit var app: Context
     @Volatile private var client: Client? = null
     val auth = MutableStateFlow<TdApi.AuthorizationState?>(null)
-    val fileUpdates = MutableSharedFlow<TdApi.File>(extraBufferCapacity = 512)
     val isPremium = MutableStateFlow(false)
     private val sends = ConcurrentHashMap<Long, CompletableDeferred<SendResult>>()
-
-    fun filesDir(): File = app.filesDir
-    fun cacheDir(): File = app.cacheDir
-    fun appCtx(): Context = app
 
     fun init(ctx: Context) {
         app = ctx.applicationContext
@@ -50,34 +45,38 @@ object Td {
                 if (s is TdApi.AuthorizationStateWaitTdlibParameters) sendParams()
                 if (s is TdApi.AuthorizationStateClosed) { client = null; init(app) }
             }
-            is TdApi.UpdateFile -> { fileUpdates.tryEmit(o.file); TgStream.update(o.file) }
-            is TdApi.UpdateMessageSendSucceeded -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(o.message, null))
-            is TdApi.UpdateMessageSendFailed -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(null, o.error))
-            is TdApi.UpdateOption -> if (o.name == "is_premium") isPremium.value = (o.value as? TdApi.OptionValueBoolean)?.value == true
-            is TdApi.UpdateDeleteMessages -> {
-                if (!o.fromCache && o.messageIds != null && o.messageIds.isNotEmpty()) {
-                    try { br.geracaoai.nuvem.data.Db.forgetMessages(o.chatId, o.messageIds.toList()) } catch (_: Exception) {}
-                }
-            }
+            is TdApi.UpdateMessageSendSucceeded ->
+                sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(o.message, null))
+            is TdApi.UpdateMessageSendFailed ->
+                sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(null, o.error))
+            is TdApi.UpdateOption ->
+                if (o.name == "is_premium") isPremium.value = (o.value as? TdApi.OptionValueBoolean)?.value == true
             else -> {}
         }
     }
 
-    /** Envia os parâmetros se o usuário já configurou api_id/api_hash. */
+    /** Envia api_id e api_hash, se o usuário já configurou. */
     fun sendParams() {
         val c = client ?: return
         if (auth.value !is TdApi.AuthorizationStateWaitTdlibParameters) return
-        val id = Prefs.apiId; val hash = Prefs.apiHash
+        val id = Prefs.apiId
+        val hash = Prefs.apiHash
         if (id == 0 || hash.isBlank()) return
         val p = TdApi.SetTdlibParameters().apply {
             useTestDc = false
             databaseDirectory = File(app.filesDir, "tdlib").absolutePath
             filesDirectory = File(app.filesDir, "tdfiles").absolutePath
             databaseEncryptionKey = ByteArray(0)
-            useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
-            apiId = id; apiHash = hash
-            systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.6.2"
+            useFileDatabase = true
+            useChatInfoDatabase = true
+            useMessageDatabase = true
+            useSecretChats = false
+            apiId = id
+            apiHash = hash
+            systemLanguageCode = "pt-BR"
+            deviceModel = Build.MODEL ?: "Android"
+            systemVersion = Build.VERSION.RELEASE ?: ""
+            applicationVersion = "Nuvem 2.0"
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }
@@ -87,33 +86,40 @@ object Td {
     @Suppress("UNCHECKED_CAST")
     private suspend fun <T : TdApi.Object> sendOnce(f: TdApi.Function<T>): T = suspendCancellableCoroutine { cont ->
         val c = client
-        if (c == null) { cont.resumeWithException(TdException(500, "TDLib não iniciado")); return@suspendCancellableCoroutine }
+        if (c == null) {
+            cont.resumeWithException(TdException(500, "TDLib não iniciado"))
+            return@suspendCancellableCoroutine
+        }
         c.send(f) { r ->
             if (!cont.isActive) return@send
-            if (r is TdApi.Error) cont.resumeWithException(TdException(r.code, r.message)) else cont.resume(r as T)
+            if (r is TdApi.Error) cont.resumeWithException(TdException(r.code, r.message))
+            else cont.resume(r as T)
         }
     }
 
-    /** Envia um pedido ao TDLib. [timeoutMs] <= 0 desliga o limite (uploads longos). */
+    /** Envia um pedido ao TDLib. [timeoutMs] <= 0 desliga o limite. */
     suspend fun <T : TdApi.Object> send(f: TdApi.Function<T>, timeoutMs: Long = DEFAULT_TIMEOUT_MS): T {
         if (timeoutMs <= 0L) return sendOnce(f)
         return try {
             withTimeout(timeoutMs) { sendOnce(f) }
         } catch (e: TimeoutCancellationException) {
-            throw TdException(408, "Tempo esgotado ao falar com o Telegram (${timeoutMs / 1000}s). Verifique a conexão e tente de novo.")
+            throw TdException(408, "Tempo esgotado ao falar com o Telegram. Verifique a conexão.")
         }
     }
 
+    /** Espera o Telegram confirmar um envio (o id é o do envio temporário). */
     suspend fun awaitSend(tempId: Long): SendResult {
         val d = sends.getOrPut(tempId) { CompletableDeferred() }
-        try { return d.await() } finally { sends.remove(tempId) }
+        try {
+            return d.await()
+        } finally {
+            sends.remove(tempId)
+        }
     }
-
-    /** Mensagens que ainda estão sendo enviadas (id temporário). */
-    fun pendingSends(): List<Long> = sends.keys.toList()
 
     suspend fun awaitReady(timeoutMs: Long = 30_000): Boolean =
         withTimeoutOrNull(timeoutMs) { auth.first { it is TdApi.AuthorizationStateReady } } != null
 
-    val ready get() = auth.value is TdApi.AuthorizationStateReady
+    val ready: Boolean
+        get() = auth.value is TdApi.AuthorizationStateReady
 }
