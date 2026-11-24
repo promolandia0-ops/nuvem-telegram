@@ -63,7 +63,7 @@ fun WatchedScreen() {
         Shizuku.addRequestPermissionResultListener(l); Shizuku.addBinderReceivedListenerSticky(b)
         onDispose { Shizuku.removeRequestPermissionResultListener(l); Shizuku.removeBinderReceivedListener(b) }
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { shiz = Shiz.state(); safOk = SafAccess.granted(ctx); WatchedSync.runNow(ctx) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { shiz = Shiz.state(); safOk = SafAccess.granted(ctx) }
     val now by wm.getWorkInfosForUniqueWorkFlow(WatchedSync.NOW).collectAsStateWithLifecycle(emptyList())
     val per by wm.getWorkInfosForUniqueWorkFlow(WatchedSync.PERIODIC).collectAsStateWithLifecycle(emptyList())
     val running = if (paused) null else (now + per).firstOrNull { it.state == WorkInfo.State.RUNNING }

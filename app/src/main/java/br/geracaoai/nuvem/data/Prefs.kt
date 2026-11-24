@@ -70,7 +70,7 @@ object Prefs2 {
     /** true = usuário apertou "Parar"; nada recomeça sozinho até "Retomar". */
     var backupPaused: Boolean get() = p.getBoolean("paused", false); set(v) = p.edit().putBoolean("paused", v).commit().let {}
     var watchedPaused: Boolean get() = p.getBoolean("wpaused", false); set(v) = p.edit().putBoolean("wpaused", v).commit().let {}
-    var watchedEnabled: Boolean get() = p.getBoolean("wenabled", true); set(v) = p.edit().putBoolean("wenabled", v).apply()
+    var watchedEnabled: Boolean get() = p.getBoolean("wenabled", false); set(v) = p.edit().putBoolean("wenabled", v).apply()
     var watchedTree: String get() = p.getString("wtree", "")!!; set(v) = p.edit().putString("wtree", v).apply()
     var watchedLast: Long get() = p.getLong("wlast", 0); set(v) = p.edit().putLong("wlast", v).apply()
     var watchedError: String get() = p.getString("werr", "")!!; set(v) = p.edit().putString("werr", v).apply()

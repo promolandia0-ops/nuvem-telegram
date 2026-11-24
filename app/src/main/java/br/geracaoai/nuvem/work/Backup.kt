@@ -99,12 +99,13 @@ object Backup {
 
     fun runNow(c: Context, ignoreConstraints: Boolean = false, expedited: Boolean = false) {
         if (Prefs2.backupPaused) return
-        if (isWorkRunning(c)) return
+        // Automático: não empilha se já roda. Manual (Iniciar): sempre começa, trocando um run preso.
+        if (!ignoreConstraints && isWorkRunning(c)) return
         WorkManager.getInstance(c).cancelUniqueWork(CONTINUE)
         val b = OneTimeWorkRequestBuilder<BackupWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
         b.setConstraints(if (ignoreConstraints) Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build() else constraints())
         if (expedited) b.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-        WorkManager.getInstance(c).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, b.build())
+        WorkManager.getInstance(c).enqueueUniqueWork(NOW, if (ignoreConstraints) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, b.build())
     }
 
     /** Agenda a continuação depois de um timeout ou queda, sem rodar em paralelo. */
@@ -193,7 +194,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             keep.release(); return Result.success()
         }
         if (!Td.awaitReady()) { keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry() }
-        if (!Backup.tryStart()) { keep.release(); return Result.success() }
+        if (!Backup.tryStart()) { keep.release(); Backup.continueSoon(applicationContext, 1); return Result.success() }
         return try {
             startForegroundSafe()
             runBackup()
