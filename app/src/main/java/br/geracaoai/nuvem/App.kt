@@ -15,7 +15,8 @@ class App : Application() {
         super.onCreate()
         Prefs.init(this)
         Db.init(this)
-        ActionLog.load(); FailStore.load()
+        // leituras de registros fora da thread da tela (antes travavam a abertura e geravam "não está respondendo")
+        Thread { try { ActionLog.load(); FailStore.load(); br.geracaoai.nuvem.data.RestoreStore.load() } catch (_: Exception) {} }.start()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(Backup.CHANNEL, "Backup", NotificationManager.IMPORTANCE_LOW))
         getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -26,7 +27,6 @@ class App : Application() {
         Backup.schedule(this)
         br.geracaoai.nuvem.work.NetworkWatch.start(this)
         br.geracaoai.nuvem.work.WatchedSync.schedule(this)
-        br.geracaoai.nuvem.data.RestoreStore.load()
         br.geracaoai.nuvem.work.MediaWatch.start(this)
     }
 }

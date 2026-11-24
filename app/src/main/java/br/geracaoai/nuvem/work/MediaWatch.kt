@@ -25,7 +25,7 @@ object MediaWatch {
         val run = object : Runnable {
             override fun run() {
                 if (!Prefs.instantBackup || Prefs2.backupPaused || Prefs.chatId == 0L) return
-                if (Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) return
+                if (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty()) return
                 Backup.runNow(app, ignoreConstraints = false, expedited = true)
             }
         }
