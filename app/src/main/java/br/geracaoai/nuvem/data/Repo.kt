@@ -867,32 +867,46 @@ object Repo {
 
     /** Verificação rigorosa antes de apagar: confere na hora se a mensagem ainda existe no Telegram. */
     suspend fun verifyForDelete(items: List<LocalItem>, onProgress: (Int) -> Unit): List<LocalItem> = withContext(Dispatchers.IO) {
-        items.filterIndexed { idx, i ->
-            onProgress(idx)
+        // 1) sem rede: acha no banco a mensagem de cada arquivo (hash e tamanho)
+        val cands = ArrayList<Triple<LocalItem, CloudItem, String>>()
+        for (i in items) {
             try {
-                val f = File(i.path); if (!f.exists() || f.length() != i.size) return@filterIndexed false
+                val f = File(i.path); if (!f.exists() || f.length() != i.size) continue
                 val h = Db.cachedHash(i.path, i.size, i.mtime) ?: Hash.quick(f)
-                val ci = Db.anyByHash(h, i.size) ?: Db.anyByHash(h) ?: Db.anyByNameSize(i.name, i.size) ?: return@filterIndexed false
-                val m = try {
-                    Td.send(TdApi.GetMessage(ci.chatId, ci.msgId), 20_000)
-                } catch (e: TdException) {
-                    if (CloudSync.isMessageGone(e.code, e.message) || CloudSync.isChatGone(e.code, e.message)) {
-                        Db.deleteCloud(ci.chatId, ci.msgId)
-                        val orig = if (ci.hash.isNotBlank()) Db.originalByHash(ci.chatId, ci.hash) else null
-                        if (orig != null) Db.deleteCloud(orig.chatId, orig.msgId)
-                    }
-                    return@filterIndexed false
-                }
-                val r = remoteOf(m) ?: return@filterIndexed false
-                val meta = Meta.parse(captionOf(m))
-                val match = when {
-                    meta != null -> (meta.hash == h || meta.hash.isBlank()) && (meta.size == i.size || meta.size == 0L)
-                    ci.size == i.size -> true
-                    else -> false
-                }
-                match && r.file.remote.isUploadingCompleted && (r.file.remote.id.isNotEmpty() || r.file.remote.uniqueId.isNotEmpty())
-            } catch (_: Exception) { false }
+                val ci = Db.anyByHash(h, i.size) ?: Db.anyByHash(h) ?: Db.anyByNameSize(i.name, i.size) ?: continue
+                cands += Triple(i, ci, h)
+            } catch (_: Exception) {}
         }
+        // 2) rede: uma consulta por 100 mensagens (antes: uma por arquivo, com até 20 s de espera cada)
+        val out = ArrayList<LocalItem>()
+        var done = 0
+        for ((chat, group) in cands.groupBy { it.second.chatId }) {
+            for (chunk in group.chunked(100)) {
+                val byId: Map<Long, TdApi.Message> = try {
+                    val r = Td.send(TdApi.GetMessages(chat, chunk.map { it.second.msgId }.toLongArray()), 30_000)
+                    (r.messages ?: emptyArray()).filterNotNull().associateBy { it.id }
+                } catch (_: Exception) { emptyMap() }
+                for ((item, ci, h) in chunk) {
+                    val m = byId[ci.msgId] ?: continue
+                    if (matchesOnTelegram(m, h, item.size, ci.size)) out += item
+                }
+                done += chunk.size
+                onProgress(done)
+            }
+        }
+        out
+    }
+
+    /** A mensagem no Telegram é o mesmo arquivo (hash/tamanho na legenda) e o upload terminou. */
+    private fun matchesOnTelegram(m: TdApi.Message, h: String, size: Long, cloudSize: Long): Boolean {
+        val r = remoteOf(m) ?: return false
+        val meta = Meta.parse(captionOf(m))
+        val match = when {
+            meta != null -> (meta.hash == h || meta.hash.isBlank()) && (meta.size == size || meta.size == 0L)
+            cloudSize == size -> true
+            else -> false
+        }
+        return match && r.file.remote.isUploadingCompleted && (r.file.remote.id.isNotEmpty() || r.file.remote.uniqueId.isNotEmpty())
     }
 
     /**
@@ -909,6 +923,7 @@ object Repo {
                 val stored = Db.idsForChat(chat)
                 if (stored.isEmpty()) continue
                 val found = HashSet<Long>()
+                val unknown = HashSet<Long>()
                 var goneChat = false
                 for (chunk in stored.chunked(100)) {
                     var tries = 0
@@ -922,18 +937,11 @@ object Repo {
                         catch (e: TdException) {
                             if (CloudSync.isChatGone(e.code, e.message)) { goneChat = true; break }
                             val sec = floodWaitSeconds(e.message) ?: if (e.code == 429) 5 else null
+                            if (sec != null && sec > 90) { unknown += chunk; break }
                             if (sec != null) { delay((sec + 1) * 1000L); tries++ }
                             else {
-                                // fallback: um a um neste lote
-                                for (id in chunk) {
-                                    try {
-                                        val m = Td.send(TdApi.GetMessage(chat, id), 12_000)
-                                        if (m.id != 0L) found += m.id
-                                    } catch (e2: TdException) {
-                                        if (CloudSync.isChatGone(e2.code, e2.message)) { goneChat = true; break }
-                                        // missing: simply not added to found
-                                    } catch (_: Exception) {}
-                                }
+                                // não deu pra ler o lote agora: fica no índice (não é tratado como apagado)
+                                unknown += chunk
                                 break
                             }
                         }
@@ -944,7 +952,7 @@ object Repo {
                     removed += stored.size
                     Db.clearCloud(chat)
                 } else {
-                    val missing = CloudSync.missingIds(stored, found)
+                    val missing = CloudSync.missingIds(stored, found + unknown)
                     if (missing.isNotEmpty()) {
                         Db.forgetMessages(chat, missing)
                         removed += missing.size
