@@ -21,6 +21,9 @@ object MediaScan {
 
     private var cached: Pair<Long, List<LocalItem>>? = null
 
+    @Synchronized
+    fun invalidate() { cached = null }
+
     /** Guarda o resultado por 10 min: cada backup (inclusive o instantâneo) não relê o celular inteiro. */
     @Synchronized
     fun allAnywhere(c: Context): List<LocalItem> {

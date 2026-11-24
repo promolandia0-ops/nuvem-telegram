@@ -217,16 +217,16 @@ fun BackupScreen(
                 }
                 TextButton({
                     scope.launch { DiscoverStore.refresh(ctx) }
-                }, Modifier.fillMaxWidth(), enabled = !scanning && (sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())) {
+                }, Modifier.fillMaxWidth(), enabled = !scanning && (Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty())) {
                     Icon(Icons.Rounded.Search, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(if (scanning) "Procurando…" else "Procurar novos agora")
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TextButton(enabled = !scanning && (sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()), onClick = {
+                    TextButton(enabled = !scanning && (Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()), onClick = {
                         scope.launch { DiscoverStore.refresh(ctx, biggestFirst = true) }
                     }) { Text("Procurar os maiores") }
-                    TextButton(enabled = !scanning && (sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()), onClick = {
+                    TextButton(enabled = !scanning && (Prefs.backupAll || sel.isNotEmpty() || Prefs.secretFolders.isNotEmpty()), onClick = {
                         scope.launch { DiscoverStore.refresh(ctx) }
                     }) { Text("Procurar tudo") }
                 }

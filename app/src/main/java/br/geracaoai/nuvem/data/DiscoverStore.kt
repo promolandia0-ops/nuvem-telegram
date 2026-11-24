@@ -12,6 +12,7 @@ object DiscoverStore {
 
     suspend fun refresh(c: Context, biggestFirst: Boolean = false): DiscoverSummary = withContext(Dispatchers.IO) {
         scanning.value = true
+        MediaScan.invalidate()
         try {
             val s = scan(c, biggestFirst)
             summary.value = s
@@ -26,8 +27,13 @@ object DiscoverStore {
     }
 
     fun scan(c: Context, biggestFirst: Boolean = false): DiscoverSummary {
-        val folders = (Prefs.folders + Prefs.secretFolders).filter { it.isNotBlank() }
         val access = AllFilesAccess.granted()
+        // Modo "tudo": varre o aparelho inteiro (sem miniaturas), agrupado por pasta de origem.
+        val everything: Map<String, List<LocalItem>>? = if (Prefs.backupAll) {
+            try { MediaScan.allAnywhere(c).groupBy { it.bucket } } catch (_: Exception) { emptyMap() }
+        } else null
+        val folders = if (everything != null) everything.keys.sorted()
+            else (Prefs.folders + Prefs.secretFolders).filter { it.isNotBlank() }
         if (folders.isEmpty()) return DiscoverSummary(allFilesAccess = access)
         val cloud = try { Db.allCloudMany(Prefs.allKnownChats()) } catch (_: Exception) { emptyList() }
         val index = cloud.map { CloudIdentity(it.path, it.name, it.size, it.hash) }
@@ -36,7 +42,8 @@ object DiscoverStore {
         val allFree = ArrayList<LocalItem>()
         val seenNew = HashSet<String>()
         for (b in folders) {
-            val items = try { LocalMedia.scanAndWalk(c, b) } catch (_: Exception) { emptyList() }
+            val items = if (everything != null) everything[b].orEmpty()
+                else try { LocalMedia.scanAndWalk(c, b) } catch (_: Exception) { emptyList() }
             val listed = with(LocalMedia) { items.map { it.toListed() } }
             val pending = DiscoverLogic.pendingFast(listed, index)
             val free = DiscoverLogic.freeableFast(listed, index)
