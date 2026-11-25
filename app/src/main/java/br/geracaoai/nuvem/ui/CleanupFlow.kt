@@ -178,3 +178,40 @@ private fun ChoiceRow(selected: Boolean, title: String, sub: String, onClick: ()
         }
     }
 }
+
+/**
+ * Liberar espaço do celular, igual em todo o app: procura fotos, vídeos e arquivos (modo Arquivos)
+ * que já estão na nuvem e abre a limpeza transparente. Use: val free = rememberFreeSpace(); free()
+ */
+@Composable
+fun rememberFreeSpace(): () -> Unit {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var loading by remember { mutableStateOf(false) }
+    var items by remember { mutableStateOf<List<LocalItem>?>(null) }
+    var empty by remember { mutableStateOf(false) }
+    CleanupFlow(items) { _ -> items = null }
+    if (loading) AlertDialog({}, confirmButton = {}, text = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(22.dp)); Spacer(Modifier.width(12.dp))
+            Text("Procurando fotos, vídeos e arquivos que já estão na nuvem…")
+        }
+    })
+    if (empty) AlertDialog({ empty = false }, confirmButton = { TextButton({ empty = false }) { Text("OK") } },
+        title = { Text("Nada pra liberar agora") },
+        text = { Text("Não achei no celular nenhum arquivo que já esteja confirmado na nuvem.\n\n" +
+            "Se o backup ainda está rodando, espere terminar. Arquivos fora da galeria (PDF, ZIP…) precisam estar numa pasta com backup em Arquivos → Celular.") })
+    return remember {
+        {
+            if (!loading) {
+                loading = true
+                scope.launch {
+                    val list = withContext(Dispatchers.IO) { try { Repo.freeableQuick(ctx).items } catch (_: Exception) { emptyList() } }
+                    loading = false
+                    DiagLog.log("LIMPAR", "liberar espaço: ${list.size} candidatos (${list.count { it.uri.scheme == "file" }} arquivos fora da galeria)")
+                    if (list.isEmpty()) empty = true else items = list
+                }
+            }
+        }
+    }
+}

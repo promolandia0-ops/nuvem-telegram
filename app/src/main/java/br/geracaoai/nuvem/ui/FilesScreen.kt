@@ -152,6 +152,21 @@ private fun PhoneBrowser() {
         }
         if (!allOn) Button({ askAll = true }, contentPadding = PaddingValues(horizontal = 14.dp)) { Text("Fazer") }
     }
+    val freeSpace = rememberFreeSpace()
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp).clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer).clickable { freeSpace() }.padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.CleaningServices, null, tint = Nv.Gold)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Liberar espaço", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text("Apaga do celular o que já está na nuvem (arquivos, fotos e vídeos). Mostra os GB antes.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(Icons.Rounded.ChevronRight, null)
+    }
     if (askAll) AlertDialog({ askAll = false },
         icon = { Icon(Icons.Rounded.CloudUpload, null) },
         title = { Text("Fazer backup de todos os arquivos?") },

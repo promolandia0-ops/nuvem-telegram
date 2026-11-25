@@ -326,13 +326,14 @@ fun Thumb(ci: CloudItem, modifier: Modifier) {
 @Composable
 fun FreeUpEntry(onBrowseFolder: (String) -> Unit, modifier: Modifier = Modifier) {
     var show by remember { mutableStateOf(false) }
-    GlassCard(modifier.fillMaxWidth(), onClick = { show = true }, radius = 20.dp, padding = 14.dp) {
+    val freeSpace = rememberFreeSpace()
+    GlassCard(modifier.fillMaxWidth(), onClick = { freeSpace() }, radius = 20.dp, padding = 14.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Rounded.CleaningServices, null, tint = Nv.Gold)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Liberar espaço", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("Abra uma pasta com backup pra revisar e apagar o que já está no Telegram.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Fotos, vídeos e arquivos que já estão na nuvem saem do celular. Mostra os GB antes de apagar.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

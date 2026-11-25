@@ -104,6 +104,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
     var showDiag by remember { mutableStateOf(false) }
     var showAppDiag by remember { mutableStateOf(false) }
     var cacheAsk by remember { mutableStateOf(false) }
+    val freeSpace = rememberFreeSpace()
     var cacheSize by remember { mutableLongStateOf(-1L) }
     var cacheMsg by remember { mutableStateOf<String?>(null) }
     val appCtx = androidx.compose.ui.platform.LocalContext.current
@@ -158,7 +159,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
                         cleaning = false
                     }
                 }
-                SettingsLine(Icons.Rounded.CleaningServices, "Liberar espaço", "Arquivos já no Telegram vão para a lixeira do celular", tag = FeatureTags.SETTINGS_LIBERAR) { showFree = true }
+                SettingsLine(Icons.Rounded.CleaningServices, "Liberar espaço", "Fotos, vídeos e arquivos que já estão na nuvem saem do celular", tag = FeatureTags.SETTINGS_LIBERAR) { freeSpace() }
                 Column(Modifier.testTag(FeatureTags.SETTINGS_DUPLICADAS)) { DupCleanRow() }
                 SecretSettingsRow()
                 SettingsLine(Icons.Rounded.Info, "Diagnóstico de pastas", "Arquivos no disco, no Telegram e arquivos novos") { showDiag = true }

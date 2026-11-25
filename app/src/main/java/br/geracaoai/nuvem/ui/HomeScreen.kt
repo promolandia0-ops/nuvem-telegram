@@ -318,10 +318,8 @@ fun BackupScreen(
     }
     if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = { onBrowseFolder(it) }, folders = folders)
 
-    CleanupFlow(if (confirmFree) summary?.freeable.orEmpty() else null) { _ ->
-        confirmFree = false
-        scope.launch { DiscoverStore.refresh(ctx) }
-    }
+    val freeSpace = rememberFreeSpace()
+    LaunchedEffect(confirmFree) { if (confirmFree) { confirmFree = false; freeSpace() } }
     freeMsg?.let { msg -> AlertDialog({ freeMsg = null }, confirmButton = { TextButton({ freeMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
     if (showDups) ModalBottomSheet({ showDups = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.testTag(FeatureTags.PANE_DUPLICADAS).padding(16.dp).navigationBarsPadding()) {

@@ -183,10 +183,8 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
     var buckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
     var removeFolder by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { buckets = withContext(Dispatchers.IO) { try { LocalMedia.buckets(ctx) } catch (_: Exception) { emptyList() } } }
-    var cleanup by remember { mutableStateOf<List<LocalItem>?>(null) }
-    var loadingFree by remember { mutableStateOf(false) }
-    var freeEmpty by remember { mutableStateOf(false) }
-    CleanupFlow(cleanup) { _ -> cleanup = null }
+    val freeSpace = rememberFreeSpace()
+    val loadingFree = false
     fun applyPrefs() {
         Prefs.backupAll = all; Prefs.folders = mediaSel; Prefs.autoBackup = auto; Prefs.wifiOnly = wifi
         Prefs.chargingOnly = charging; Prefs.instantBackup = instant
@@ -269,14 +267,8 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                 }
                 item(key = "free") {
                     GlassCard(onClick = {
-                        if (loadingFree || s.running) return@GlassCard
-                        loadingFree = true
-                        scope.launch {
-                            val list = withContext(Dispatchers.IO) { try { Repo.freeableQuick(ctx).items } catch (_: Exception) { emptyList() } }
-                            loadingFree = false
-                            if (list.isEmpty()) freeEmpty = true else cleanup = list
-                        }
-                    }, padding = 14.dp) {
+                        if (!s.running) freeSpace()
+}, padding = 14.dp) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.CleaningServices, null, tint = Nv.Gold)
                             Spacer(Modifier.width(12.dp))
@@ -365,9 +357,6 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
             }
         }
     }
-    if (freeEmpty) AlertDialog({ freeEmpty = false }, confirmButton = { TextButton({ freeEmpty = false }) { Text("OK") } },
-        title = { Text("Nada pra liberar agora") },
-        text = { Text("Não achei no celular nenhum arquivo que já esteja salvo na nuvem. Faça o backup primeiro; depois volte aqui.") })
     removeFolder?.let { path ->
         AlertDialog({ removeFolder = null },
             title = { Text("Tirar \"${path.substringAfterLast('/')}\" do backup?") },
