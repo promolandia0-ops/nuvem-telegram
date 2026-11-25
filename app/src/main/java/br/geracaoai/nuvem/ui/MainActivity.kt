@@ -124,8 +124,8 @@ fun MainShell(onLogout: () -> Unit) {
                     when (t) {
                         0 -> GalleryScreen(null, mode = 0, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
                         1 -> GalleryScreen(null, mode = 1, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
-                        2 -> GalleryScreen(null, mode = 2, onBrowseFolder = { browseFolder = it }, actions = acts, onOpen = openViewer)
-                        else -> FilesScreen(acts, openViewer)
+                        2 -> GalleryScreen(null, mode = 2, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
+                        else -> FilesScreen(acts, openViewer, banner = { BackupBanner(openBackup) })
                     }
                 }
             }

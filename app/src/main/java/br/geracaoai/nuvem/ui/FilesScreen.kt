@@ -72,13 +72,14 @@ fun openLocalFile(ctx: Context, file: File, mime: String = "") {
 /** Aba Arquivos: navegar nas pastas do celular (e mandar pasta inteira pro backup) ou ver o que está na nuvem. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FilesScreen(actions: @Composable RowScope.() -> Unit, onOpenMedia: (List<CloudItem>, Int) -> Unit) {
+fun FilesScreen(actions: @Composable RowScope.() -> Unit, onOpenMedia: (List<CloudItem>, Int) -> Unit, banner: @Composable () -> Unit = {}) {
     var side by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Arquivos", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             actions()
         }
+        banner()
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
             SegmentedButton(side == 0, { side = 0 }, SegmentedButtonDefaults.itemShape(0, 3), icon = {}) { Text("Celular", maxLines = 1) }
             SegmentedButton(side == 1, { side = 1 }, SegmentedButtonDefaults.itemShape(1, 3), icon = {}) { Text("Nuvem", maxLines = 1) }
@@ -158,8 +159,10 @@ private fun PhoneBrowser() {
         confirmButton = { Button({
             Prefs.fileFolders = Prefs.fileFolders + FileScan.rootPath()
             foldersVer++; askAll = false
-            scope.launch(Dispatchers.IO) { Backup.runNow(ctx, true) }
-            Toast.makeText(ctx, "Backup de todos os arquivos começou.", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                val busy = withContext(Dispatchers.IO) { Backup.isWorkRunning(ctx).also { Backup.runNow(ctx, true) } }
+                Toast.makeText(ctx, if (busy) "Tem um backup rodando: os arquivos entram logo em seguida. Acompanhe na faixa lá em cima." else "Backup de todos os arquivos começou. Acompanhe na faixa lá em cima.", Toast.LENGTH_LONG).show()
+            }
         }) { Text("Fazer backup") } },
         dismissButton = { TextButton({ askAll = false }) { Text("Cancelar") } })
     if (askAllOff) AlertDialog({ askAllOff = false },
@@ -217,8 +220,10 @@ private fun PhoneBrowser() {
             confirmButton = { Button({
                 Prefs.fileFolders = Prefs.fileFolders + f.absolutePath
                 foldersVer++; ask = null
-                scope.launch(Dispatchers.IO) { Backup.runNow(ctx, true) }
-                Toast.makeText(ctx, "Backup de ${f.name} começou.", Toast.LENGTH_SHORT).show()
+                scope.launch {
+                    val busy = withContext(Dispatchers.IO) { Backup.isWorkRunning(ctx).also { Backup.runNow(ctx, true) } }
+                    Toast.makeText(ctx, if (busy) "Tem um backup rodando: ${f.name} entra logo em seguida." else "Backup de ${f.name} começou. Acompanhe na faixa lá em cima.", Toast.LENGTH_LONG).show()
+                }
             }) { Text("Salvar") } },
             dismissButton = { TextButton({ ask = null }) { Text("Cancelar") } })
     }

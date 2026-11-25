@@ -128,6 +128,20 @@ object Backup {
         WorkManager.getInstance(c).enqueueUniqueWork(NOW, if (ignoreConstraints) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, b.build())
     }
 
+    /** Comprovante da última rodada ("Concluído às 16:40: …"), mostrado na faixa e na central. */
+    fun saveLastRun(text: String) {
+        Prefs.raw.edit().putString("last_run_text", text).putLong("last_run_at", System.currentTimeMillis()).apply()
+    }
+    fun lastRunText(): String = Prefs.raw.getString("last_run_text", "") ?: ""
+    fun lastRunAt(): Long = Prefs.raw.getLong("last_run_at", 0L)
+
+    /** Começa outra rodada logo que esta terminar (pasta nova ligada no meio do backup). */
+    fun followUp(c: Context) {
+        val req = OneTimeWorkRequestBuilder<BackupWorker>().setInitialDelay(5, TimeUnit.SECONDS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
+        WorkManager.getInstance(c).enqueueUniqueWork(CONTINUE, ExistingWorkPolicy.REPLACE, req)
+    }
+
     /** Agenda a continuação depois de um timeout ou queda, sem rodar em paralelo. */
     fun continueSoon(c: Context, delayMin: Long = 1) {
         if (Prefs2.backupPaused || !Prefs.autoBackup) return
@@ -256,9 +270,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     private suspend fun runBackup(): Result {
         Prefs.lastError = ""
+        var bytesDone = 0L; var bytesTotal = 0L; var phase = "prep"
+        val fileKeysAtStart = FileScan.keys(); val mediaAtStart = Prefs.folders + Prefs.secretFolders; val allAtStart = Prefs.backupAll
         fun report(d: Int, total: Int, name: String, pct: Int) {
             Backup.beat()
-            setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct))
+            setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct,
+                "bytesDone" to bytesDone, "bytesTotal" to bytesTotal, "phase" to phase))
             try {
                 setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
             } catch (_: Exception) {}
@@ -279,6 +296,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         val max = Meta.maxSize(Td.isPremium.value)
         val allByBucket: Map<String, List<LocalItem>> by lazy { MediaScan.allAnywhere(applicationContext).groupBy { it.bucket } }
         val selected = (if (Prefs.backupAll) allByBucket.keys.toSet() else Prefs.folders + Prefs.secretFolders) + FileScan.keys()
+        phase = "scan"
         report(0, 0, "Procurando arquivos nas pastas…", 0)
         val folderCache = HashMap<String, List<LocalItem>>()
         fun loadFolder(name: String): List<LocalItem> = folderCache.getOrPut(name) {
@@ -287,11 +305,19 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             if (prio.isEmpty()) items
             else items.sortedWith(compareBy<LocalItem> { if (it.path in prio) 0 else 1 }.thenBy { it.taken }.thenBy { it.mediaId })
         }
-        val counts = withContext(Dispatchers.IO) { selected.associateWith { loadFolder(it).size } }
+        var found = 0
+        val counts = withContext(Dispatchers.IO) {
+            selected.associateWith { key ->
+                report(0, 0, "Procurando arquivos: ${FolderPlan.albumName(key)} ($found achados até agora)", 0)
+                val l = loadFolder(key); found += l.size; bytesTotal += l.sumOf { it.size }; l.size
+            }
+        }
+        phase = "send"
         val folders = FolderPlan.order(selected.filter { (counts[it] ?: 0) > 0 })
         val total = folders.sumOf { counts[it] ?: 0 }
         if (folders.isEmpty() || total == 0) {
             Prefs.lastError = if (selected.isEmpty()) "Nenhuma pasta selecionada." else "Nenhum arquivo acessível nas pastas escolhidas. Confira a permissão de fotos e vídeos."
+            Backup.saveLastRun("Não achei arquivos pra enviar. " + Prefs.lastError)
             Prefs.lastBackup = System.currentTimeMillis()
             Checkpoint.clear()
             return Result.success()
@@ -432,7 +458,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                                 sentInFolder++
                                 if (h.isNotBlank()) FailStore.remove(h)
                             }
-                            done++; folderDone++
+                            done++; folderDone++; bytesDone += item.size
                             Checkpoint.mark(album, done, total, Checkpoint.itemKey(item.path, item.size, item.mtime), runStarted)
                         }
                         report(done, total, "$album • $folderDone de $folderTotal • ${chunk.last().first.name}", 100)
@@ -446,7 +472,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                         is Ev.Skip -> {
                             if (ev.needOrig) missingOrig += ev.item to ev.hash
                             Dedup.claimHash(seen, ev.hash, ev.item.size)
-                            done++; folderDone++
+                            done++; folderDone++; bytesDone += ev.item.size
                             Checkpoint.mark(album, done, total, Checkpoint.itemKey(ev.item.path, ev.item.size, ev.item.mtime), runStarted)
                             report(done, total, "$album • $folderDone de $folderTotal • ${ev.item.name}", 100)
                         }
@@ -515,6 +541,13 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         RestoreStore.priorityPaths = emptySet()
         Checkpoint.clear()
         try { FreeAsk.check(applicationContext) } catch (_: Exception) {}
-        return Result.success(workDataOf("sent" to (sentPhotos + sentVideos + sentDocs), "summary" to summary))
+        val sentN = sentPhotos + sentVideos + sentDocs
+        Backup.saveLastRun(
+            if (sentN > 0) "$summary • $total arquivos conferidos" + (if (leftover.isNotEmpty()) " • ${leftover.size} falharam" else "")
+            else "Tudo já estava na nuvem • $total arquivos conferidos (${br.geracaoai.nuvem.ui.fmtBytes(bytesTotal)})"
+        )
+        // Pasta ligada enquanto este backup rodava: emenda já, sem esperar a próxima hora.
+        if (FileScan.keys() != fileKeysAtStart || (Prefs.folders + Prefs.secretFolders) != mediaAtStart || Prefs.backupAll != allAtStart) Backup.followUp(applicationContext)
+        return Result.success(workDataOf("sent" to sentN, "summary" to summary))
     }
 }

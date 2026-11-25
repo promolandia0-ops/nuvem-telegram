@@ -44,8 +44,19 @@ data class BackupUiState(
     val name: String,
     val pct: Int,
     val error: String,
+    val bytesDone: Long = 0,
+    val bytesTotal: Long = 0,
+    val phase: String = "",
+    val queued: Boolean = false,
 ) {
-    val fraction get() = if (total > 0) (done / total.toFloat()).coerceIn(0f, 1f) else 0f
+    /** Progresso geral: por GB quando dá (mais honesto com vídeo grande), senão por arquivo. */
+    val fraction get() = when {
+        bytesTotal > 0 -> (bytesDone / bytesTotal.toDouble()).toFloat().coerceIn(0f, 1f)
+        total > 0 -> (done / total.toFloat()).coerceIn(0f, 1f)
+        else -> 0f
+    }
+    val percent get() = (fraction * 100).toInt()
+    val scanning get() = running && (phase == "scan" || phase == "prep" || total == 0)
 }
 
 @Composable
@@ -60,6 +71,7 @@ fun rememberBackupState(): BackupUiState {
     val paused = remember(tick, now, per, cont) { Prefs2.backupPaused }
     val error = remember(tick, now, per, cont) { Prefs.lastError }
     val w = if (paused) null else (now + per + cont).firstOrNull { it.state == WorkInfo.State.RUNNING }
+    val queued = !paused && w == null && (now + cont).any { it.state == WorkInfo.State.ENQUEUED }
     val p = w?.progress
     return BackupUiState(
         running = w != null,
@@ -69,6 +81,10 @@ fun rememberBackupState(): BackupUiState {
         name = p?.getString("name") ?: "",
         pct = p?.getInt("pct", 0) ?: 0,
         error = if (isCancelMessage(error)) "" else error,
+        bytesDone = p?.getLong("bytesDone", 0L) ?: 0L,
+        bytesTotal = p?.getLong("bytesTotal", 0L) ?: 0L,
+        phase = p?.getString("phase") ?: "",
+        queued = queued,
     )
 }
 
@@ -90,19 +106,33 @@ fun BackupStatusIcon(onClick: () -> Unit) {
     }
 }
 
-/** Faixa no topo de Fotos e Vídeos: diz em uma linha o que o backup está fazendo. */
+private val hhmm = SimpleDateFormat("HH:mm", Locale("pt", "BR"))
+private val ddhhmm = SimpleDateFormat("dd/MM 'às' HH:mm", Locale("pt", "BR"))
+
+/** Comprovante da última rodada: "Concluído às 16:40 • …". */
+fun lastRunLine(): String {
+    val at = Backup.lastRunAt(); val t = Backup.lastRunText()
+    if (at <= 0 || t.isBlank()) return ""
+    val same = System.currentTimeMillis() - at < 20 * 3600_000L
+    return "Concluído ${if (same) "às " + hhmm.format(Date(at)) else "em " + ddhhmm.format(Date(at))} • $t"
+}
+
+/** Faixa de status no topo de todas as abas: fase, %, arquivos, GB e o arquivo atual. */
 @Composable
 fun BackupBanner(onClick: () -> Unit) {
     val s = rememberBackupState()
     val (icon, tone, title, sub) = when {
+        s.scanning -> Quad4(Icons.Rounded.ManageSearch, MaterialTheme.colorScheme.primary, "Procurando arquivos…",
+            s.name.ifBlank { "Pode levar alguns minutos no celular inteiro" })
         s.running -> Quad4(Icons.Rounded.CloudUpload, MaterialTheme.colorScheme.primary,
-            if (s.total > 0) "Enviando ${s.done} de ${s.total}" else "Preparando o backup…",
-            s.name.ifBlank { "Fazendo backup no Telegram" })
+            "Enviando ${s.percent}% • ${s.done} de ${s.total}",
+            (if (s.bytesTotal > 0) "${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)} • " else "") + s.name)
+        s.queued -> Quad4(Icons.Rounded.Schedule, Nv.Gold, "Backup na fila", if (Prefs.wifiOnly) "Começa assim que tiver internet (o automático espera o Wi-Fi)" else "Começa em instantes")
         s.paused -> Quad4(Icons.Rounded.PauseCircle, Nv.Gold, "Backup pausado", "Toque para retomar")
         !backupConfigured() -> Quad4(Icons.Rounded.CloudUpload, MaterialTheme.colorScheme.primary, "Backup desligado", "Toque para escolher o que salvar")
         s.error.isNotBlank() -> Quad4(Icons.Rounded.ErrorOutline, Nv.Rose, "Backup precisa de atenção", traduz(s.error))
         else -> Quad4(Icons.Rounded.CloudDone, MaterialTheme.colorScheme.primary, "Backup em dia",
-            if (Prefs.lastBackup > 0) "Último: " + SimpleDateFormat("dd/MM HH:mm", Locale("pt", "BR")).format(Date(Prefs.lastBackup)) else "Novas fotos sobem sozinhas")
+            lastRunLine().ifBlank { "Novos arquivos sobem sozinhos" })
     }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp))
@@ -113,11 +143,12 @@ fun BackupBanner(onClick: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (s.running) LinearProgressIndicator({ s.fraction }, Modifier.fillMaxWidth().height(3.dp), color = MaterialTheme.colorScheme.primary, trackColor = Color.Transparent)
+        if (s.scanning) LinearProgressIndicator(Modifier.fillMaxWidth().height(4.dp))
+        else if (s.running) LinearProgressIndicator({ s.fraction }, Modifier.fillMaxWidth().height(4.dp), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
     }
 }
 
@@ -168,26 +199,37 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(when {
-                                    s.running && s.total > 0 -> "Enviando ${s.done} de ${s.total}"
-                                    s.running -> "Preparando…"
+                                    s.scanning -> "Procurando arquivos…"
+                                    s.running -> "Enviando ${s.percent}%"
+                                    s.queued -> "Na fila"
                                     s.paused -> "Pausado"
                                     !configured -> "Desligado"
                                     else -> "Em dia"
                                 }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                                 val sub = when {
                                     s.running -> s.name
+                                    s.queued -> "Começa assim que tiver internet."
                                     s.error.isNotBlank() -> traduz(s.error)
+                                    lastRunLine().isNotBlank() -> lastRunLine()
                                     Prefs.lastBackup > 0 -> "Último backup: " + SimpleDateFormat("dd/MM 'às' HH:mm", Locale("pt", "BR")).format(Date(Prefs.lastBackup))
                                     else -> "Escolha abaixo o que vai pra nuvem."
                                 }
                                 if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = if (s.error.isNotBlank() && !s.running) Nv.Rose else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
                         }
-                        if (s.running) {
+                        if (s.scanning) {
                             Spacer(Modifier.height(12.dp))
-                            LinearProgressIndicator({ s.fraction }, Modifier.fillMaxWidth().clip(CircleShape))
+                            LinearProgressIndicator(Modifier.fillMaxWidth().clip(CircleShape))
+                        } else if (s.running) {
+                            Spacer(Modifier.height(12.dp))
+                            LinearProgressIndicator({ s.fraction }, Modifier.fillMaxWidth().height(8.dp).clip(CircleShape))
+                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.fillMaxWidth()) {
+                                Text("${s.done} de ${s.total} arquivos", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                if (s.bytesTotal > 0) Text("${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)}", style = MaterialTheme.typography.bodySmall)
+                            }
                             if (s.pct in 1..99) {
-                                Spacer(Modifier.height(6.dp))
+                                Spacer(Modifier.height(4.dp))
                                 Text("Arquivo atual: ${s.pct}%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
