@@ -16,7 +16,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        Prefs.init(this)
+        Prefs.init(this); br.geracaoai.nuvem.data.BackupQueue.load()
         br.geracaoai.nuvem.data.DiagLog.init(this)
         val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->

@@ -15,10 +15,14 @@ object FileScan {
 
     /** Só os arquivos soltos na raiz do armazenamento (sem subpastas). */
     const val FLAT = "dirflat:"
+    /** Pasta principal vinda do "backup de tudo": só arquivos que pesam (fotos e vídeos vão pelo backup de mídia). */
+    const val SMART = "dirs:"
+    /** Arquivos escolhidos um a um (fila), agrupados pela pasta onde estão. */
+    const val PICK = "pick:"
 
     fun keyFor(path: String) = PREFIX + path.trimEnd('/')
-    fun isKey(key: String) = key.startsWith(PREFIX) || key.startsWith(FLAT)
-    fun pathOf(key: String) = key.removePrefix(PREFIX).removePrefix(FLAT)
+    fun isKey(key: String) = key.startsWith(PREFIX) || key.startsWith(FLAT) || key.startsWith(SMART) || key.startsWith(PICK)
+    fun pathOf(key: String) = key.removePrefix(PREFIX).removePrefix(FLAT).removePrefix(SMART).removePrefix(PICK)
     fun nameOf(key: String) = if (key.startsWith(FLAT)) "Celular" else pathOf(key).substringAfterLast('/').ifBlank { "Arquivos" }
 
     /** Raiz do armazenamento (/storage/emulated/0): "todos os arquivos do celular". */
@@ -36,7 +40,7 @@ object FileScan {
         else {
             val dirs = (try { File(p).listFiles() } catch (_: Exception) { null } ?: emptyArray())
                 .filter { it.isDirectory && !it.name.startsWith(".") && !it.name.equals("Android", true) }
-            dirs.map { keyFor(it.absolutePath) } + (FLAT + p.trimEnd('/'))
+            dirs.map { SMART + it.absolutePath.trimEnd('/') } + (FLAT + p.trimEnd('/'))
         }
     }.toSet()
 
@@ -53,8 +57,34 @@ object FileScan {
             ?: "application/octet-stream"
     }
 
+    private val JUNK_EXT = setOf("db", "db-wal", "db-shm", "db-journal", "log", "tmp", "temp", "json", "xml", "nomedia", "dat", "bak", "cache", "lock", "idx", "crc", "ini", "cfg", "thumb", "thumbnails", "exo", "chck")
+    private val JUNK_DIR = setOf(".thumbnails", "thumbnails", "thumbs", "cache", ".cache", "caches", "logs", "log", "tmp", "temp", ".trash", ".trashed", "lost+found")
+    /** Arquivo "que pesa" no varrer tudo: 1 MB ou mais e não é lixo de app. Fotos/vídeos ficam com o backup de mídia. */
+    const val SMART_MIN = 1024L * 1024
+    fun isHeavyFile(f: File, size: Long): Boolean {
+        val n = f.name.lowercase()
+        if (n.startsWith(".")) return false
+        val ext = n.substringAfterLast('.', "")
+        if (ext in JUNK_EXT) return false
+        if (BackupDiff.isMediaFile(n)) return false
+        return size >= SMART_MIN
+    }
+
+    /** Arquivos escolhidos um a um que estão nessa pasta. */
+    fun picked(key: String): List<LocalItem> {
+        val dir = pathOf(key).trimEnd('/')
+        val album = dir.substringAfterLast('/').ifBlank { "Arquivos" }
+        return BackupQueue.files().filter { File(it).parent?.trimEnd('/') == dir }.mapNotNull { p ->
+            val f = File(p); if (!f.isFile) return@mapNotNull null
+            val size = f.length(); if (size <= 0) return@mapNotNull null
+            LocalItem(Uri.fromFile(f), f.absolutePath, f.name, size, f.lastModified(), f.lastModified(), album, relOf(dir), mimeOf(f.name))
+        }
+    }
+
     /** Todos os arquivos da pasta e subpastas, do mais antigo para o mais novo. */
     fun walk(key: String): List<LocalItem> {
+        if (key.startsWith(PICK)) return picked(key)
+        val smart = key.startsWith(SMART) || key.startsWith(FLAT)
         val root = File(pathOf(key))
         if (!root.isDirectory) return emptyList()
         val album = nameOf(key)
@@ -67,11 +97,12 @@ object FileScan {
             val list = try { d.listFiles() } catch (_: Exception) { null } ?: continue
             for (f in list) {
                 if (f.isDirectory) {
-                    if (!recursive || f.name.startsWith(".") || f.name.lowercase() in SKIP_DIRS) continue
+                    if (!recursive || f.name.startsWith(".") || f.name.lowercase() in SKIP_DIRS || (smart && f.name.lowercase() in JUNK_DIR)) continue
                     stack.addLast(f)
                 } else if (f.isFile) {
                     val size = try { f.length() } catch (_: Exception) { 0L }
                     if (size <= 0L) continue
+                    if (smart && !isHeavyFile(f, size)) continue
                     val mtime = f.lastModified()
                     val rel = relOf(d.absolutePath)
                     out += LocalItem(Uri.fromFile(f), f.absolutePath, f.name, size, mtime, mtime, album, rel, mimeOf(f.name))

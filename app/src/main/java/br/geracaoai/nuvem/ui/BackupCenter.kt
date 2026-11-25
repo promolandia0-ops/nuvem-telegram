@@ -123,6 +123,30 @@ fun lastRunLine(): String {
     return "Concluído ${if (same) "às " + hhmm.format(Date(at)) else "em " + ddhhmm.format(Date(at))} • $t"
 }
 
+/** MEGA → Telegram (mesma fila, outra origem): quantos faltam e o que está passando. */
+data class MegaUiState(val running: Boolean, val pending: Int, val text: String, val pct: Int)
+
+@Composable
+fun rememberMegaState(): MegaUiState {
+    val ctx = LocalContext.current
+    val wm = remember { WorkManager.getInstance(ctx) }
+    val up by wm.getWorkInfosForUniqueWorkFlow(br.geracaoai.nuvem.mega.MegaUpload.WORK).collectAsStateWithLifecycle(emptyList())
+    val imp by wm.getWorkInfosForUniqueWorkFlow(br.geracaoai.nuvem.mega.MegaImport.WORK).collectAsStateWithLifecycle(emptyList())
+    val later by wm.getWorkInfosForUniqueWorkFlow(br.geracaoai.nuvem.mega.MegaImport.WORK + "_later").collectAsStateWithLifecycle(emptyList())
+    val status by br.geracaoai.nuvem.mega.MegaWeb.status.collectAsStateWithLifecycle()
+    val runImp = (imp + later).firstOrNull { it.state == WorkInfo.State.RUNNING }
+    val runUp = up.any { it.state == WorkInfo.State.RUNNING }
+    val pendingUp = up.count { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED || it.state == WorkInfo.State.RUNNING }
+    return when {
+        runImp != null -> {
+            val d = runImp.progress.getInt("done", 0); val t = runImp.progress.getInt("total", 0)
+            MegaUiState(true, (t - d).coerceAtLeast(0) + pendingUp, (if (t > 0) "$d de $t • " else "") + (runImp.progress.getString("name") ?: ""), runImp.progress.getInt("pct", 0))
+        }
+        runUp || pendingUp > 0 -> MegaUiState(true, pendingUp, status, -1)
+        else -> MegaUiState(false, 0, "", -1)
+    }
+}
+
 /** Faixa de status no topo de todas as abas: fase, %, arquivos, GB e o arquivo atual. */
 @Composable
 fun BackupBanner(onClick: () -> Unit) {
@@ -130,6 +154,8 @@ fun BackupBanner(onClick: () -> Unit) {
     val ctx = LocalContext.current
     val conn by br.geracaoai.nuvem.tg.Td.connection.collectAsStateWithLifecycle()
     val reason = remember(s.queued, conn) { if (s.queued) Backup.queueReason(ctx) else "" }
+    val mega = rememberMegaState()
+    val queue by BackupQueue.items.collectAsStateWithLifecycle()
     val (icon, tone, title, sub) = when {
         s.scanning -> Quad4(Icons.Rounded.ManageSearch, MaterialTheme.colorScheme.primary, "Procurando arquivos…",
             s.name.ifBlank { "Pode levar alguns minutos no celular inteiro" })
@@ -139,6 +165,8 @@ fun BackupBanner(onClick: () -> Unit) {
             "Enviando ${s.percent}% • ${s.done} de ${s.total}",
             (if (s.bytesTotal > 0) "${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)} • " else "") + s.name)
         s.queued -> Quad4(Icons.Rounded.Schedule, Nv.Gold, "Backup na fila", reason)
+        mega.running -> Quad4(Icons.Rounded.CloudSync, MaterialTheme.colorScheme.primary, "MEGA → Telegram" + if (mega.pending > 0) " • ${mega.pending} na fila" else "",
+            mega.text.ifBlank { "Subindo do MEGA pro Telegram…" })
         s.paused -> Quad4(Icons.Rounded.PauseCircle, Nv.Gold, "Backup pausado", "Toque para retomar")
         !backupConfigured() -> Quad4(Icons.Rounded.CloudUpload, MaterialTheme.colorScheme.primary, "Backup desligado", "Toque para escolher o que salvar")
         s.error.isNotBlank() -> Quad4(Icons.Rounded.ErrorOutline, Nv.Rose, "Backup precisa de atenção", traduz(s.error))
@@ -158,7 +186,12 @@ fun BackupBanner(onClick: () -> Unit) {
             }
             Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (s.running && queue.isNotEmpty()) Text("Na fila depois: ${BackupQueue.describe()}", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 48.dp, bottom = 6.dp))
+        if (s.running && mega.running) Text("MEGA → Telegram também subindo" + if (mega.pending > 0) " (${mega.pending} na fila)" else "", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 48.dp, bottom = 6.dp))
         if (s.scanning) LinearProgressIndicator(Modifier.fillMaxWidth().height(4.dp))
+        else if (!s.running && mega.running) { if (mega.pct in 0..100) LinearProgressIndicator({ mega.pct / 100f }, Modifier.fillMaxWidth().height(4.dp)) else LinearProgressIndicator(Modifier.fillMaxWidth().height(4.dp)) }
         else if (s.running) LinearProgressIndicator({ s.fraction }, Modifier.fillMaxWidth().height(4.dp), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
     }
 }
@@ -288,6 +321,54 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                 item(key = "fail") { FailedUploadsCard() }
                 item(key = "restq") { RestoreQueueCard() }
 
+                item(key = "tudo") {
+                    val allOn = all && FileScan.allPhone
+                    GlassCard(padding = 14.dp) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.AllInclusive, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Backup de tudo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Varre o celular inteiro: fotos, vídeos e arquivos que pesam (1 MB ou mais). Fica de fora: ícones, miniaturas, cache e arquivinhos de app.",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            AuroraSwitch(allOn) { on ->
+                                if (on) {
+                                    all = true
+                                    if (AllFilesAccess.granted()) { Prefs.fileFolders = Prefs.fileFolders + FileScan.rootPath() }
+                                    else try { ctx.startActivity(AllFilesAccess.intent(ctx).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                                    fileFolders = Prefs.fileFolders
+                                    applyPrefs(); Backup.runNow(ctx, true)
+                                } else {
+                                    Prefs.fileFolders = Prefs.fileFolders.filterNot { FileScan.isRoot(it) }.toSet(); fileFolders = Prefs.fileFolders
+                                    all = false; applyPrefs()
+                                }
+                            }
+                        }
+                        if (all && !FileScan.allPhone) Text("Fotos e vídeos já entram. Pra entrar também os arquivos, libere \"Acesso a todos os arquivos\" e ligue de novo.",
+                            style = MaterialTheme.typography.labelSmall, color = Nv.Gold, modifier = Modifier.padding(top = 6.dp))
+                        Text("Ou escolha na mão: segure um álbum (Álbuns → No celular) ou pastas e arquivos (Arquivos → Celular) e toque em Fazer backup.",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                    }
+                }
+                item(key = "fila") {
+                    val q by BackupQueue.items.collectAsStateWithLifecycle()
+                    val mega = rememberMegaState()
+                    if (q.isNotEmpty() || mega.running) GlassCard(padding = 14.dp) {
+                        Text("Fila do backup", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        if (q.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.PlaylistAdd, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                            Text("Escolhidos: ${BackupQueue.describe()}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TextButton({ BackupQueue.clear() }) { Text("Tirar da fila") }
+                        }
+                        if (mega.running) Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.CloudSync, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                            Text("MEGA → Telegram" + (if (mega.pending > 0) ": ${mega.pending} na fila" else "") + (if (mega.text.isNotBlank()) " • ${mega.text}" else ""),
+                                style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        }
+                    }
+                }
                 item(key = "h_media") { SectionTitle("Fotos e vídeos") }
                 item(key = "media") {
                     GlassCard(padding = 8.dp) {

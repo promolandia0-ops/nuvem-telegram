@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -105,6 +106,9 @@ private fun PhoneBrowser() {
     var foldersVer by remember { mutableIntStateOf(0) }
     var ask by remember { mutableStateOf<File?>(null) }
     var askRemove by remember { mutableStateOf<File?>(null) }
+    var sel by remember { mutableStateOf(setOf<String>()) }
+    val selecting = sel.isNotEmpty()
+    fun toggle(p: String) { sel = if (p in sel) sel - p else sel + p }
     val life = LocalLifecycleOwner.current
     DisposableEffect(life) {
         val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) access = AllFilesAccess.granted() }
@@ -116,7 +120,8 @@ private fun PhoneBrowser() {
         entries = withContext(Dispatchers.IO) { FileScan.list(dir) }
     }
     val atRoot = dir.absolutePath.trimEnd('/') == root.absolutePath.trimEnd('/')
-    BackHandler(!atRoot) { path = dir.parentFile?.absolutePath ?: root.absolutePath }
+    BackHandler(selecting) { sel = emptySet() }
+    BackHandler(!selecting && !atRoot) { path = dir.parentFile?.absolutePath ?: root.absolutePath }
 
     if (!access) {
         GlassCard(Modifier.padding(16.dp), padding = 16.dp) {
@@ -146,8 +151,8 @@ private fun PhoneBrowser() {
         Icon(if (allOn) Icons.Rounded.CloudDone else Icons.Rounded.CloudUpload, null, tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(if (allOn) "Todos os arquivos estão no backup" else "Fazer backup de todos os arquivos", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Text(if (allOn) "Arquivos novos sobem sozinhos. Toque pra desligar." else "Um toque: todas as pastas do celular, qualquer tipo de arquivo.",
+            Text(if (allOn) "Backup de tudo ligado" else "Fazer backup de tudo", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(if (allOn) "Arquivos novos sobem sozinhos. Toque pra desligar." else "Um toque: fotos, vídeos e arquivos que pesam. Ou segure pastas/arquivos abaixo pra escolher.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (!allOn) Button({ askAll = true }, contentPadding = PaddingValues(horizontal = 14.dp)) { Text("Fazer") }
@@ -170,9 +175,10 @@ private fun PhoneBrowser() {
     if (askAll) AlertDialog({ askAll = false },
         icon = { Icon(Icons.Rounded.CloudUpload, null) },
         title = { Text("Fazer backup de todos os arquivos?") },
-        text = { Text("Todas as pastas do celular vão pra nuvem: documentos, downloads, WhatsApp, PDFs, ZIPs, áudios… Cada pasta principal vira um álbum. Fica de fora só a pasta Android (dados de apps) e pastas ocultas. Arquivos novos também sobem sozinhos.\n\nPode levar horas na primeira vez; roda em segundo plano.") },
+        text = { Text("Varre o celular inteiro e manda o que pesa: todas as fotos e vídeos e os arquivos de 1 MB ou mais (documentos, PDFs, ZIPs, áudios, APKs…). Cada pasta principal vira um álbum.\n\nFica de fora: ícones de apps, miniaturas, cache, logs, bancos de dados de apps, a pasta Android e as pastas ocultas.\n\nArquivos novos também sobem sozinhos. Pode levar horas na primeira vez; roda em segundo plano.") },
         confirmButton = { Button({
             Prefs.fileFolders = Prefs.fileFolders + FileScan.rootPath()
+            Prefs.backupAll = true
             foldersVer++; askAll = false
             scope.launch {
                 val busy = withContext(Dispatchers.IO) { Backup.isWorkRunning(ctx).also { Backup.runNow(ctx, true) } }
@@ -188,7 +194,24 @@ private fun PhoneBrowser() {
             foldersVer++; askAllOff = false
         }) { Text("Parar") } },
         dismissButton = { TextButton({ askAllOff = false }) { Text("Cancelar") } })
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    if (selecting) Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)).padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton({ sel = emptySet() }) { Icon(Icons.Rounded.Close, "Cancelar seleção") }
+        Text("${sel.size} selecionado${if (sel.size == 1) "" else "s"}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        TextButton({ sel = sel + (entries ?: emptyList()).map { it.file.absolutePath } }) { Text("Tudo") }
+        Button({
+            val dirs = sel.filter { File(it).isDirectory }; val files = sel.filter { File(it).isFile }
+            BackupQueue.addDirs(dirs); BackupQueue.addFiles(files)
+            val n = sel.size; sel = emptySet()
+            scope.launch {
+                val busy = withContext(Dispatchers.IO) { Backup.isWorkRunning(ctx).also { Backup.runNow(ctx, true) } }
+                Toast.makeText(ctx, if (busy) "$n na fila do backup. Sobem logo depois do que está subindo." else "Backup de $n começou. Acompanhe na faixa lá em cima.", Toast.LENGTH_LONG).show()
+            }
+        }, contentPadding = PaddingValues(horizontal = 14.dp)) { Icon(Icons.Rounded.CloudUpload, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Fazer backup") }
+    } else Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (!atRoot) IconButton({ path = dir.parentFile?.absolutePath ?: root.absolutePath }) { Icon(Icons.Rounded.ArrowUpward, "Pasta de cima") }
         else Spacer(Modifier.width(12.dp))
         val crumbs = ("Celular/" + FileScan.relOf(path)).trimEnd('/').replace("/", "  ›  ")
@@ -211,7 +234,9 @@ private fun PhoneBrowser() {
         items(list, key = { it.file.absolutePath }) { e ->
             if (e.isDir) {
                 val inBackup = remember(e.file.absolutePath, foldersVer) { FileScan.isCovered(e.file.absolutePath) }
-                FileRow(Icons.Rounded.Folder, Nv.Gold, e.file.name, "${e.children} ${if (e.children == 1) "item" else "itens"}", onClick = { path = e.file.absolutePath }) {
+                FileRow(Icons.Rounded.Folder, Nv.Gold, e.file.name, "${e.children} ${if (e.children == 1) "item" else "itens"}",
+                    onClick = { if (selecting) toggle(e.file.absolutePath) else path = e.file.absolutePath },
+                    onLongClick = { toggle(e.file.absolutePath) }, selected = e.file.absolutePath in sel) {
                     IconButton({
                         if (!inBackup) ask = e.file
                         else if (e.file.absolutePath in Prefs.fileFolders) askRemove = e.file
@@ -223,7 +248,9 @@ private fun PhoneBrowser() {
                 }
             } else {
                 val (icon, tone) = fileIcon(e.file.name)
-                FileRow(icon, tone, e.file.name, "${fmtBytes(e.size)} • ${fileDateFmt.format(Date(e.mtime))}", onClick = { openLocalFile(ctx, e.file) }) {}
+                FileRow(icon, tone, e.file.name, "${fmtBytes(e.size)} • ${fileDateFmt.format(Date(e.mtime))}",
+                    onClick = { if (selecting) toggle(e.file.absolutePath) else openLocalFile(ctx, e.file) },
+                    onLongClick = { toggle(e.file.absolutePath) }, selected = e.file.absolutePath in sel) {}
             }
         }
     }
@@ -252,10 +279,14 @@ private fun PhoneBrowser() {
 }
 
 @Composable
-private fun FileRow(icon: ImageVector, tone: Color, title: String, sub: String, onClick: () -> Unit, trailing: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun FileRow(icon: ImageVector, tone: Color, title: String, sub: String, onClick: () -> Unit, onLongClick: (() -> Unit)? = null, selected: Boolean = false, trailing: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth()
+        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent)
+        .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+        .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(tone.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = tone)
+            Icon(if (selected) Icons.Rounded.CheckCircle else icon, null, tint = if (selected) MaterialTheme.colorScheme.primary else tone)
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {

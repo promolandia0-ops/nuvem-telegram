@@ -257,7 +257,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         Td.init(applicationContext)
         keep.acquire()
         if (Prefs2.backupPaused) { DiagLog.log("BACKUP", "não começou: pausado"); keep.release(); return Result.success() }
-        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty() && Prefs.fileFolders.isEmpty())) {
+        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty() && Prefs.fileFolders.isEmpty() && BackupQueue.current().isEmpty())) {
             Prefs.lastError = "Escolha o chat do Telegram em Ajustes para o backup começar."
             DiagLog.log("BACKUP", "não começou: sem chat ou sem pasta")
             keep.release(); return Result.success()
@@ -310,6 +310,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         var bytesDone = 0L; var bytesTotal = 0L; var phase = "prep"
         var partial = 0L; var lastPush = 0L; var lastKey = ""
         val fileKeysAtStart = FileScan.keys(); val mediaAtStart = Prefs.folders + Prefs.secretFolders; val allAtStart = Prefs.backupAll
+        val queueAtStart = BackupQueue.current()
         // [pct] = % do arquivo atual. A tela lê o ao vivo na hora; banco e notificação no máximo 1x por segundo.
         fun report(d: Int, total: Int, name: String, pct: Int) {
             Backup.beat()
@@ -341,7 +342,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
         val max = Meta.maxSize(Td.isPremium.value)
         val allByBucket: Map<String, List<LocalItem>> by lazy { MediaScan.allAnywhere(applicationContext).groupBy { it.bucket } }
-        val selected = (if (Prefs.backupAll) allByBucket.keys.toSet() else Prefs.folders + Prefs.secretFolders) + FileScan.keys()
+        val selected = (if (Prefs.backupAll) allByBucket.keys.toSet() else Prefs.folders + Prefs.secretFolders) + FileScan.keys() + BackupQueue.keys()
         phase = "scan"
         report(0, 0, "Procurando arquivos nas pastas…", 0)
         val folderCache = HashMap<String, List<LocalItem>>()
@@ -364,6 +365,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         if (folders.isEmpty() || total == 0) {
             Prefs.lastError = if (selected.isEmpty()) "Nenhuma pasta selecionada." else "Nenhum arquivo acessível nas pastas escolhidas. Confira a permissão de fotos e vídeos."
             Backup.saveLastRun("Não achei arquivos pra enviar. " + Prefs.lastError)
+            BackupQueue.remove(queueAtStart)
             Prefs.lastBackup = System.currentTimeMillis()
             Checkpoint.clear()
             return Result.success()
@@ -595,8 +597,9 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             if (sentN > 0) "$summary • $total arquivos conferidos" + (if (leftover.isNotEmpty()) " • ${leftover.size} falharam" else "")
             else "Tudo já estava na nuvem • $total arquivos conferidos (${br.geracaoai.nuvem.ui.fmtBytes(bytesTotal)})"
         )
-        // Pasta ligada enquanto este backup rodava: emenda já, sem esperar a próxima hora.
-        if (FileScan.keys() != fileKeysAtStart || (Prefs.folders + Prefs.secretFolders) != mediaAtStart || Prefs.backupAll != allAtStart) Backup.followUp(applicationContext)
+        // O que estava na fila quando a rodada começou já foi; o que entrou depois emenda já.
+        BackupQueue.remove(queueAtStart)
+        if (BackupQueue.current().isNotEmpty() && BackupQueue.current() != queueAtStart || FileScan.keys() != fileKeysAtStart || (Prefs.folders + Prefs.secretFolders) != mediaAtStart || Prefs.backupAll != allAtStart) Backup.followUp(applicationContext)
         return Result.success(workDataOf("sent" to sentN, "summary" to summary))
     }
 }
