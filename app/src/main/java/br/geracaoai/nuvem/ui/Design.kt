@@ -37,40 +37,16 @@ val SoftShape = RoundedCornerShape(20.dp)
 
 @Composable
 fun AuroraBackdrop(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
-    val dark = isNvDark()
-    val shift by rememberInfiniteTransition(label = "aurora").animateFloat(
-        0f, 1f, infiniteRepeatable(tween(18000, easing = LinearEasing), RepeatMode.Reverse), label = "orb"
-    )
-    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Canvas(Modifier.fillMaxSize()) {
-            val w = size.width; val h = size.height
-            fun orb(cx: Float, cy: Float, r: Float, c: Color) {
-                drawCircle(Brush.radialGradient(listOf(c, Color.Transparent), center = Offset(cx, cy), radius = r), radius = r, center = Offset(cx, cy))
-            }
-            if (dark) {
-                orb(w * (0.15f + 0.1f * shift), h * 0.08f, w * 0.7f, Color(0xFF3D4D9A).copy(alpha = 0.38f))
-                orb(w * (0.9f - 0.12f * shift), h * 0.22f, w * 0.55f, Color(0xFF6A3D9A).copy(alpha = 0.28f))
-                orb(w * 0.5f, h * (0.78f + 0.04f * shift), w * 0.65f, Color(0xFF1A6A6A).copy(alpha = 0.18f))
-            } else {
-                orb(w * 0.2f, h * 0.05f, w * 0.6f, Color(0xFFB9C6FF).copy(alpha = 0.55f))
-                orb(w * 0.9f, h * 0.2f, w * 0.5f, Color(0xFFE0C8FF).copy(alpha = 0.4f))
-            }
-        }
-        content()
-    }
+    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), content = content)
 }
 
+/** Cartão liso (sem vidro): fundo sólido e borda fina, como apps de nuvem. */
 @Composable
 fun GlassCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, radius: Dp = 24.dp, padding: Dp = 18.dp, content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(radius)
-    val dark = isNvDark()
-    val fill = if (dark) Brush.linearGradient(listOf(Color.White.copy(0.11f), Color.White.copy(0.04f)))
-    else Brush.linearGradient(listOf(Color.White.copy(0.92f), Color.White.copy(0.78f)))
-    val stroke = if (dark) Brush.linearGradient(listOf(Color.White.copy(0.26f), Color.White.copy(0.05f)))
-    else Brush.linearGradient(listOf(Color.White, Color(0x33FFFFFF)))
+    val shape = RoundedCornerShape(radius.coerceAtMost(16.dp))
     Column(
-        modifier.shadow(if (dark) 0.dp else 12.dp, shape, ambientColor = Nv.Sky.copy(0.12f), spotColor = Nv.Sky.copy(0.16f))
-            .clip(shape).background(fill).border(1.dp, stroke, shape)
+        modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(padding),
         content = content
@@ -226,35 +202,24 @@ fun ShimmerBlock(modifier: Modifier) {
 fun NvNavBar(selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
     data class Tab(val label: String, val icon: ImageVector, val id: Int)
     val tabs = listOf(
-        Tab("Início", Icons.Rounded.Cloud, 0),
-        Tab("Fotos", Icons.Rounded.Photo, 1),
-        Tab("Assistidos", Icons.Rounded.OndemandVideo, 2),
-        Tab("Ajustes", Icons.Rounded.Settings, 3),
+        Tab("Fotos", Icons.Rounded.Photo, 0),
+        Tab("Vídeos", Icons.Rounded.VideoLibrary, 1),
+        Tab("Álbuns", Icons.Rounded.PhotoAlbum, 2),
+        Tab("Arquivos", Icons.Rounded.Folder, 3),
     )
-    val shape = RoundedCornerShape(28.dp)
-    Row(
-        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-            .shadow(16.dp, shape, ambientColor = Color.Black.copy(0.4f), spotColor = Color.Black.copy(0.4f))
-            .clip(shape)
-            .background(Brush.linearGradient(listOf(Color(0xE6151C33), Color(0xE10C1224))))
-            .border(1.dp, Color.White.copy(0.12f), shape)
-            .navigationBarsPadding()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically
-    ) {
+    androidx.compose.material3.NavigationBar(modifier, containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
         tabs.forEach { tab ->
-            val on = selected == tab.id
-            val scale by animateFloatAsState(if (on) 1f else 0.96f, spring(stiffness = Spring.StiffnessMediumLow), label = "s${tab.id}")
-            Column(
-                Modifier.weight(1f).graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(20.dp))
-                    .background(if (on) Brush.linearGradient(listOf(Nv.Sky.copy(0.28f), Nv.Violet.copy(0.22f))) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
-                    .clickable { onSelect(tab.id) }.padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(tab.icon, tab.label, Modifier.size(22.dp), tint = if (on) Color.White else Nv.Muted)
-                Spacer(Modifier.height(2.dp))
-                Text(tab.label, style = MaterialTheme.typography.labelSmall, color = if (on) Color.White else Nv.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp)
-            }
+            androidx.compose.material3.NavigationBarItem(
+                selected = selected == tab.id,
+                onClick = { onSelect(tab.id) },
+                icon = { Icon(tab.icon, tab.label) },
+                label = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                    indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                ),
+            )
         }
     }
 }

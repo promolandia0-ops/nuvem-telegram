@@ -80,7 +80,7 @@ private val DarkScheme = darkColorScheme(
     background = Nv.Night, onBackground = Nv.Ink,
     surface = Nv.Deep, onSurface = Nv.Ink, surfaceVariant = Nv.Card, onSurfaceVariant = Nv.Muted,
     surfaceContainer = Nv.Card, surfaceContainerHigh = Nv.CardHi, surfaceContainerLow = Nv.Deep, surfaceContainerLowest = Nv.Night,
-    outline = Nv.Line, outlineVariant = Color(0x22FFFFFF),
+    outline = Nv.Line, outlineVariant = Color(0x1FFFFFFF),
     error = Nv.Danger, onError = Color.White,
 )
 
@@ -89,8 +89,8 @@ private val LightScheme = lightColorScheme(
     secondary = Color(0xFF0F9E8D), onSecondary = Color.White,
     tertiary = Color(0xFF7A5CC8), background = Nv.Paper, onBackground = Nv.InkDark,
     surface = Nv.PaperCard, onSurface = Nv.InkDark, surfaceVariant = Color(0xFFE8E6F6), onSurfaceVariant = Nv.MutedLight,
-    surfaceContainer = Color(0xFFF7F5FF), surfaceContainerHigh = Color.White, surfaceContainerLow = Nv.Paper,
-    outline = Color(0x3314182A), error = Nv.Danger,
+    surfaceContainer = Color.White, surfaceContainerHigh = Color.White, surfaceContainerLow = Nv.Paper,
+    outline = Color(0x3314182A), outlineVariant = Color(0x1A14182A), error = Nv.Danger,
 )
 
 @Composable

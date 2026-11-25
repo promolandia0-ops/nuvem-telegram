@@ -7,7 +7,7 @@ import java.util.Locale
  * Sem categorias (prints, memes, vídeos longos). O nome do álbum é o da pasta.
  */
 object FolderPlan {
-    fun albumName(bucket: String): String = bucket.ifBlank { "Outros" }
+    fun albumName(bucket: String): String = if (FileScan.isKey(bucket)) FileScan.nameOf(bucket) else bucket.ifBlank { "Outros" }
 
     fun isCameraFolder(name: String): Boolean {
         val n = name.trim()

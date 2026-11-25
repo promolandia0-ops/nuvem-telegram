@@ -198,7 +198,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         Td.init(applicationContext)
         keep.acquire()
         if (Prefs2.backupPaused) { DiagLog.log("BACKUP", "não começou: pausado"); keep.release(); return Result.success() }
-        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty())) {
+        if (Prefs.chatId == 0L || (!Prefs.backupAll && Prefs.folders.isEmpty() && Prefs.secretFolders.isEmpty() && Prefs.fileFolders.isEmpty())) {
             Prefs.lastError = "Escolha o chat do Telegram em Ajustes para o backup começar."
             DiagLog.log("BACKUP", "não começou: sem chat ou sem pasta")
             keep.release(); return Result.success()
@@ -264,12 +264,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
         val max = Meta.maxSize(Td.isPremium.value)
         val allByBucket: Map<String, List<LocalItem>> by lazy { MediaScan.allAnywhere(applicationContext).groupBy { it.bucket } }
-        val selected = if (Prefs.backupAll) allByBucket.keys.toSet() else Prefs.folders + Prefs.secretFolders
+        val selected = (if (Prefs.backupAll) allByBucket.keys.toSet() else Prefs.folders + Prefs.secretFolders) + FileScan.keys()
         report(0, 0, "Procurando arquivos nas pastas…", 0)
         val folderCache = HashMap<String, List<LocalItem>>()
         fun loadFolder(name: String): List<LocalItem> = folderCache.getOrPut(name) {
             val prio = RestoreStore.priorityPaths
-            val items = (if (Prefs.backupAll) allByBucket[name].orEmpty() else LocalMedia.scanAndWalk(applicationContext, name)).filter { it.size in 1..max && (File(it.path).canRead() || it.mediaId > 0 || AllFilesAccess.granted()) }
+            val items = (if (FileScan.isKey(name)) FileScan.walk(name) else if (Prefs.backupAll) allByBucket[name].orEmpty() else LocalMedia.scanAndWalk(applicationContext, name)).filter { it.size in 1..max && (File(it.path).canRead() || it.mediaId > 0 || AllFilesAccess.granted()) }
             if (prio.isEmpty()) items
             else items.sortedWith(compareBy<LocalItem> { if (it.path in prio) 0 else 1 }.thenBy { it.taken }.thenBy { it.mediaId })
         }

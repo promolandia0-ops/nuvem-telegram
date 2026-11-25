@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -93,9 +94,9 @@ fun Root() {
 @Composable
 fun MainShell(onLogout: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    var galleryFolder by rememberSaveable { mutableStateOf<String?>(null) }
-    var videosOnly by rememberSaveable { mutableStateOf(false) }
+    var filesTab by rememberSaveable { mutableIntStateOf(0) }
     var browseFolder by rememberSaveable { mutableStateOf<String?>(null) }
+    var overlay by rememberSaveable { mutableStateOf<String?>(null) } // backup | advanced | settings | watched
     var viewer by remember { mutableStateOf<Pair<List<CloudItem>, Int>?>(null) }
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
     LaunchedEffect(Unit) {
@@ -103,35 +104,70 @@ fun MainShell(onLogout: () -> Unit) {
             Manifest.permission.ACCESS_MEDIA_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
         try { Repo.ensureDestination(); Repo.reconcileCloud(); Repo.syncIndex() } catch (_: Exception) {}
     }
+    val openBackup = { overlay = "backup" }
+    val openSettings = { overlay = "settings" }
+    val openViewer: (List<CloudItem>, Int) -> Unit = { l, i -> viewer = l to i }
     BackHandler(viewer != null) { viewer = null }
     BackHandler(viewer == null && browseFolder != null) { browseFolder = null }
-    BackHandler(viewer == null && browseFolder == null && tab == 1 && (galleryFolder != null || videosOnly)) { galleryFolder = null; videosOnly = false }
-    AuroraBackdrop {
-        Box(Modifier.fillMaxSize().statusBarsPadding()) {
-            FreeAskDialog()
-            AnimatedContent(tab, Modifier.fillMaxSize(), transitionSpec = {
-                val dir = if (targetState > initialState) 1 else -1
-                (slideInHorizontally { it / 8 * dir } + fadeIn()) togetherWith (slideOutHorizontally { -it / 8 * dir } + fadeOut())
-            }, label = "tab") { t ->
-                when (t) {
-                    0 -> BackupScreen(
-                        onFotos = { f, v -> galleryFolder = f; videosOnly = v; tab = 1 },
-                        onBrowseFolder = { browseFolder = it },
-                        onSettings = { tab = 3 },
-                        onAssistidos = { tab = 2 },
-                    )
-                    1 -> GalleryScreen(galleryFolder, videosOnly, onBack = { galleryFolder = null; videosOnly = false }, onBrowseFolder = { browseFolder = it }) { l, i -> viewer = l to i }
-                    2 -> WatchedScreen()
-                    else -> SettingsScreen(onLogout, onBrowseFolder = { browseFolder = it })
+    BackHandler(viewer == null && browseFolder == null && overlay != null) {
+        overlay = when (overlay) { "advanced" -> "backup"; else -> null }
+    }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets.statusBars,
+            bottomBar = { NvNavBar(tab, { n -> tab = n }) },
+        ) { pad ->
+            Box(Modifier.fillMaxSize().padding(pad)) {
+                AnimatedContent(tab, Modifier.fillMaxSize(), transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "tab") { t ->
+                    val acts: @Composable RowScope.() -> Unit = { TabHeaderActions(openBackup, openSettings) }
+                    when (t) {
+                        0 -> GalleryScreen(null, mode = 0, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
+                        1 -> GalleryScreen(null, mode = 1, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
+                        2 -> GalleryScreen(null, mode = 2, onBrowseFolder = { browseFolder = it }, actions = acts, onOpen = openViewer)
+                        else -> FilesScreen(acts, openViewer)
+                    }
                 }
             }
-            NvNavBar(tab, { n -> tab = n; if (n != 1) { galleryFolder = null; videosOnly = false } }, Modifier.align(Alignment.BottomCenter))
-            if (browseFolder != null && viewer == null) {
-                FolderBrowseScreen(browseFolder!!, onBack = { browseFolder = null }) { l, i -> viewer = l to i }
+        }
+        when (overlay) {
+            "backup" -> BackupCenterScreen(onClose = { overlay = null }, onAddFolder = { overlay = null; tab = 3 }, onAdvanced = { overlay = "advanced" })
+            "advanced" -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton({ overlay = "backup" }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
+                        Text("Mais opções de backup", style = MaterialTheme.typography.titleLarge)
+                    }
+                    BackupScreen(
+                        onFotos = { _, v -> overlay = null; tab = if (v) 1 else 2 },
+                        onBrowseFolder = { browseFolder = it },
+                        onSettings = { overlay = "settings" },
+                        onAssistidos = { overlay = "watched" },
+                    )
+                }
             }
-            AnimatedVisibility(viewer != null, enter = fadeIn() + scaleIn(initialScale = 0.92f), exit = fadeOut() + scaleOut(targetScale = 0.92f)) {
-                viewer?.let { (l, i) -> ViewerScreen(l, i) { viewer = null } }
+            "settings" -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton({ overlay = null }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
+                    }
+                    SettingsScreen(onLogout, onBrowseFolder = { browseFolder = it }, onBackup = { overlay = "backup" }, onAssistidos = { overlay = "watched" })
+                }
             }
+            "watched" -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton({ overlay = "settings" }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
+                    }
+                    WatchedScreen()
+                }
+            }
+        }
+        if (browseFolder != null && viewer == null) {
+            FolderBrowseScreen(browseFolder!!, onBack = { browseFolder = null }) { l, i -> viewer = l to i }
+        }
+        AnimatedVisibility(viewer != null, enter = fadeIn() + scaleIn(initialScale = 0.92f), exit = fadeOut() + scaleOut(targetScale = 0.92f)) {
+            viewer?.let { (l, i) -> ViewerScreen(l, i) { viewer = null } }
         }
     }
 }

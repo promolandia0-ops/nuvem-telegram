@@ -56,7 +56,16 @@ private val dayFmt = SimpleDateFormat("EEE, d 'de' MMM 'de' yyyy", Locale("pt", 
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Unit = {}, onBrowseFolder: (String) -> Unit = {}, onOpen: (List<CloudItem>, Int) -> Unit) {
+fun GalleryScreen(
+    folder: String?,
+    videosOnly: Boolean = false,
+    onBack: () -> Unit = {},
+    onBrowseFolder: (String) -> Unit = {},
+    mode: Int = -1,
+    actions: @Composable RowScope.() -> Unit = {},
+    banner: @Composable () -> Unit = {},
+    onOpen: (List<CloudItem>, Int) -> Unit,
+) {
     val ctx = LocalContext.current
     val ver by Db.version.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
@@ -71,11 +80,16 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
     val scope = rememberCoroutineScope()
     val showing = innerFolder
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { try { Repo.reconcileCloud() } catch (_: Exception) {} } }
-    LaunchedEffect(ver, showing, videosOnly) {
+    LaunchedEffect(ver, showing, videosOnly, mode) {
         loading = true
         all = withContext(Dispatchers.IO) {
             Db.allCloudMany(Prefs.galleryChats()).filter {
-                (showing == null || DiscoverLogic.normalizeAlbum(it.folder, it.path) == showing) && (!videosOnly || it.isVideo)
+                (showing == null || DiscoverLogic.normalizeAlbum(it.folder, it.path) == showing) && when (mode) {
+                    0 -> it.mime.startsWith("image/")
+                    1 -> it.isVideo
+                    2 -> it.isVideo || it.mime.startsWith("image/")
+                    else -> !videosOnly || it.isVideo
+                }
             }
         }
         loading = false
@@ -90,11 +104,12 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
     val albums = remember(items) { DiscoverLogic.groupAlbums(items).map { it.name to it } }
     val daySections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
     val selecting = selected.isNotEmpty()
-    val folderGrid = showing == null && !videosOnly && query.isBlank()
+    val folderGrid = showing == null && query.isBlank() && (mode == 2 || (mode == -1 && !videosOnly))
     val title = when {
         selecting -> "${selected.size} selecionados"
-        videosOnly -> "Vídeos"
         showing != null -> folderLabel(showing)
+        mode == 1 || videosOnly -> "Vídeos"
+        mode == 2 -> "Álbuns"
         else -> "Fotos"
     }
     fun goBack() {
@@ -102,23 +117,24 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
         if (folder == null && showing != null) { innerFolder = null; return }
         onBack()
     }
-    androidx.activity.compose.BackHandler(showing != folder || selecting || videosOnly) { goBack() }
+    androidx.activity.compose.BackHandler(showing != folder || selecting || (mode == -1 && videosOnly)) { goBack() }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (showing != null || videosOnly || (folder == null && showing != null)) {
                 // show back when drilled in or videos filter from home
             }
-            if (showing != null || videosOnly) IconButton({ goBack() }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
+            if (showing != null || (mode == -1 && videosOnly)) IconButton({ goBack() }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
             Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
             if (selecting) {
                 IconButton({ selected = items.map { it.msgId }.toSet() }) { Icon(Icons.Rounded.SelectAll, "Tudo") }
                 IconButton({ selected = emptySet() }) { Icon(Icons.Rounded.Close, "Cancelar") }
             } else if (showing != null) {
                 TextButton(enabled = !restoring, onClick = { pendingRestore = showing }) { Text(if (restoring) "Restaurando…" else "Restaurar") }
-            }
+            } else actions()
         }
-        if (folderGrid || (showing == null && !videosOnly)) {
+        if (showing == null && !selecting) banner()
+        if (showing == null) {
             OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 placeholder = { Text("Buscar por nome, data ou pasta") }, leadingIcon = { Icon(Icons.Rounded.Search, null) },
                 trailingIcon = { if (query.isNotEmpty()) IconButton({ query = "" }) { Icon(Icons.Rounded.Close, null) } },
@@ -126,17 +142,17 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
                 colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White.copy(0.06f), focusedContainerColor = Color.White.copy(0.08f)))
         }
         LazyVerticalGrid(
-            GridCells.Adaptive(if (folderGrid) 158.dp else 104.dp),
+            GridCells.Adaptive(if (folderGrid) 158.dp else 96.dp),
             Modifier.weight(1f),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = if (selecting) 168.dp else 120.dp, top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = if (selecting) 96.dp else 24.dp, top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (folderGrid) 10.dp else 3.dp),
+            verticalArrangement = Arrangement.spacedBy(if (folderGrid) 10.dp else 3.dp)
         ) {
             if (loading && items.isEmpty()) {
                 items(8, key = { "sk$it" }) { ShimmerBlock(Modifier.aspectRatio(1f)) }
             } else if (items.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    EmptyCloud(if (query.isBlank()) "Nada na nuvem ainda" else "Nada encontrado", if (query.isBlank()) "Escolha pastas no Início e toque em Iniciar." else "Tente outro termo de busca.")
+                    EmptyCloud(if (query.isBlank()) "Nada na nuvem ainda" else "Nada encontrado", if (query.isBlank()) "Toque na nuvem lá em cima para ligar o backup." else "Tente outro termo de busca.")
                 }
             } else if (folderGrid) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpEntry(onBrowseFolder) }
@@ -155,7 +171,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
                     }
                     items(list, key = { it.msgId }) { ci ->
                         val on = ci.msgId in selected
-                        Box(Modifier.animateItem().aspectRatio(1f).clip(RoundedCornerShape(14.dp)).combinedClickable(
+                        Box(Modifier.animateItem().aspectRatio(1f).clip(RoundedCornerShape(4.dp)).combinedClickable(
                             onClick = {
                                 if (selecting) selected = if (on) selected - ci.msgId else selected + ci.msgId
                                 else onOpen(items, items.indexOf(ci))
@@ -175,7 +191,7 @@ fun GalleryScreen(folder: String?, videosOnly: Boolean = false, onBack: () -> Un
             }
         }
         AnimatedVisibility(selecting, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 96.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xE6151C33)).padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xE6151C33)).padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 TextButton({
                     val chosen = items.filter { it.msgId in selected }
                     Restore.enqueue(ctx, chosen)
@@ -221,7 +237,7 @@ fun Thumb(ci: CloudItem, modifier: Modifier) {
     val path by produceState(thumbCache[ci.msgId], ci.msgId) {
         if (value == null) value = withContext(Dispatchers.IO) { Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
     }
-    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color.White.copy(0.06f))) {
+    Box(modifier.clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
         AnimatedVisibility(path != null, enter = fadeIn()) {
             val req = ImageRequest.Builder(ctx).data(path?.let { File(it) }).size(280).crossfade(true).build()
             AsyncImage(req, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

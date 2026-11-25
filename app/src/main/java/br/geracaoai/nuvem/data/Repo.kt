@@ -1123,6 +1123,7 @@ object Repo {
         val srcFile = File(src)
         if (!srcFile.isFile) return@withContext false
         val video = ci.isVideo
+        if (!video && !ci.mime.startsWith("image/")) return@withContext restoreFile(c, ci, srcFile)
         val rels = listOf(restoreRelativePath(ci), RestoreLogic.mediaRelativePath("", ci.folder, video))
         for (rel in rels.distinct()) {
             val cv = ContentValues().apply {
@@ -1151,6 +1152,41 @@ object Repo {
             }
         }
         false
+    }
+
+    /** Arquivo comum (PDF, ZIP, documento…): volta para o caminho original; se não der, Download/Nuvem/pasta. */
+    private fun restoreFile(c: Context, ci: CloudItem, srcFile: File): Boolean {
+        val name = ci.name.ifBlank { srcFile.name }
+        if (AllFilesAccess.granted() && ci.path.contains('/')) {
+            try {
+                val root = LocalMedia.storageRoots().firstOrNull() ?: File("/storage/emulated/0")
+                var target = File(root, ci.path.trimStart('/'))
+                if (target.exists() && target.length() != ci.size) target = File(target.parentFile, "restaurado_" + target.name)
+                if (target.exists() && target.length() == ci.size) { RestoreStore.markKeyDone(ci.chatId, ci.msgId); return true }
+                target.parentFile?.mkdirs()
+                srcFile.inputStream().use { i -> target.outputStream().use { i.copyTo(it) } }
+                if (ci.taken > 0) target.setLastModified(ci.taken)
+                RestoreStore.markKeyDone(ci.chatId, ci.msgId)
+                return true
+            } catch (_: Exception) {}
+        }
+        var uri: android.net.Uri? = null
+        return try {
+            val cv = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, ci.mime.ifBlank { "application/octet-stream" })
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/Nuvem/${ci.folder.ifBlank { "Arquivos" }}/")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            uri = c.contentResolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), cv) ?: return false
+            c.contentResolver.openOutputStream(uri)!!.use { o -> srcFile.inputStream().use { it.copyTo(o) } }
+            c.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            RestoreStore.markKeyDone(ci.chatId, ci.msgId)
+            true
+        } catch (_: Exception) {
+            uri?.let { try { c.contentResolver.delete(it, null, null) } catch (_: Exception) {} }
+            false
+        }
     }
 
     suspend fun restoreAlbum(c: Context, folder: String, onProgress: ((Int, Int) -> Unit)? = null): Pair<Int, Int> = withContext(Dispatchers.IO) {

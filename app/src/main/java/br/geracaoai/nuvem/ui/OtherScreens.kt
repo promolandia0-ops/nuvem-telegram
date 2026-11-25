@@ -86,7 +86,7 @@ fun SettingsLine(icon: androidx.compose.ui.graphics.vector.ImageVector, title: S
 }
 
 @Composable
-fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) {
+fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, onBackup: () -> Unit = {}, onAssistidos: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val theme by Prefs.theme.collectAsStateWithLifecycle()
     var confirmOut by remember { mutableStateOf(false) }
@@ -110,7 +110,7 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
             emailPattern = st.loginEmailAddressPattern.takeIf { it.isNotBlank() }
         } catch (_: Exception) {}
     }
-    LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 108.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 0.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("Ajustes", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold) }
         item {
             SectionTitle("Conta")
@@ -118,6 +118,13 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}) 
                 SettingsLine(Icons.Rounded.Cloud, "Destino", (Prefs.chatTitle.ifBlank { "—" }) + " • " + DestKind.label(DestKind.effective()) + if (premium) " • Premium (até 4 GB por arquivo)" else " • até 2 GB por arquivo", tag = FeatureTags.SETTINGS_DESTINO) { destConfirm = true; destResend = false }
                 SettingsLine(Icons.Rounded.Email, "E-mail de login", if (emailPattern != null) "Cadastrado: $emailPattern. Códigos futuros podem chegar neste e-mail." else "O Telegram não entra com conta Google. Cadastre um e-mail pra receber o código de login.", tag = FeatureTags.SETTINGS_EMAIL, onClick = { emailDlg = true; emailErr = null; emailInfo = null; emailCode = "" })
                 SettingsLine(Icons.Rounded.PhoneAndroid, "Sessão neste celular", "Sua conta fica salva aqui. Não precisa colocar o número de novo ao reabrir o app, só se sair da conta ou desinstalar.", tag = FeatureTags.SETTINGS_SESSAO)
+            }
+        }
+        item {
+            SectionTitle("Backup e extras")
+            GlassCard(padding = 8.dp) {
+                SettingsLine(Icons.Rounded.CloudUpload, "Backup", "O que vai pra nuvem, quando, pausar e retomar.", onClick = onBackup)
+                SettingsLine(Icons.Rounded.OndemandVideo, "Assistidos no Telegram", "Guarda vídeos que você assistiu no app do Telegram.", onClick = onAssistidos)
             }
         }
         item {
