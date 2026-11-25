@@ -43,6 +43,7 @@ private fun MegaLogin(onDone: () -> Unit) {
     var show by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
+    var status by remember { mutableStateOf("") }
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         GlassCard(padding = 16.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -66,12 +67,14 @@ private fun MegaLogin(onDone: () -> Unit) {
                     singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
             }
             err?.let { Spacer(Modifier.height(8.dp)); Text(it, color = Nv.Rose, style = MaterialTheme.typography.bodySmall) }
+            if (busy && status.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(status, color = Nv.Gold, style = MaterialTheme.typography.bodySmall) }
             Spacer(Modifier.height(12.dp))
             Button({
                 busy = true; err = null
                 scope.launch {
                     try {
                         val c = MegaClient()
+                        c.onStatus = { st -> scope.launch { status = st } }
                         withContext(Dispatchers.IO) { c.login(email, pass, pin.takeIf { needPin }) }
                         MegaStore.save(c, email.trim())
                         pass = ""

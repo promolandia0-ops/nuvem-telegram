@@ -38,21 +38,35 @@ data class MegaNode(
  */
 class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), var userHandle: String = "") {
     private var seq = Random.nextInt(0, Int.MAX_VALUE / 2)
+    /** Avisos para a tela (ex.: verificação de segurança em andamento). */
+    var onStatus: (String) -> Unit = {}
 
     // ---------- API ----------
     private fun api(cmd: JSONObject): Any {
         var wait = 500L
         var lastHttp = ""
+        var hashcash: String? = null
         repeat(6) {
             val url = "https://g.api.mega.co.nz/cs?id=${seq++}" + if (sid.isNotBlank()) "&sid=$sid" else ""
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"; doOutput = true; connectTimeout = 20_000; readTimeout = 60_000
                 setRequestProperty("Content-Type", "text/plain;charset=UTF-8")
                 setRequestProperty("User-Agent", "Nuvem/" + br.geracaoai.nuvem.BuildConfig.VERSION_NAME + " (Android)")
+                hashcash?.let { setRequestProperty("X-Hashcash", it) }
             }
             try {
                 conn.outputStream.use { it.write(JSONArray().put(cmd).toString().toByteArray()) }
                 val code = conn.responseCode
+                // 402 = o MEGA pede a prova de trabalho (hashcash) do protocolo dele; resolve e reenvia.
+                if (code == 402 && hashcash == null) {
+                    val challenge = conn.getHeaderField("X-Hashcash")
+                    if (!challenge.isNullOrBlank()) {
+                        onStatus("Verificação de segurança do MEGA… (pode levar até 1 minuto)")
+                        hashcash = solveHashcash(challenge)
+                        onStatus("")
+                        return@repeat
+                    }
+                }
                 if (code !in 200..299) {
                     val err = try { conn.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
                     lastHttp = "HTTP $code" + (err?.trim()?.take(120)?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "")
@@ -234,6 +248,33 @@ class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), 
             val c = Cipher.getInstance("AES/ECB/NoPadding").apply { init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES")) }
             repeat(16384) { h = c.doFinal(h) }
             return b64e(h.copyOfRange(0, 4) + h.copyOfRange(8, 12))
+        }
+
+        /**
+         * Prova de trabalho do MEGA (cabeçalho X-Hashcash "1:dificuldade:tempo:token"), como no SDK oficial:
+         * procura um prefixo de 4 bytes cujo SHA-256 de (prefixo + token repetido 262144 vezes)
+         * comece com um número abaixo do limite. Responde "1:token:prefixo".
+         */
+        fun solveHashcash(challenge: String): String {
+            val parts = challenge.trim().split(':')
+            if (parts.size < 4 || parts[0] != "1") throw MegaException(-100, "Desafio do MEGA em formato novo ($challenge).")
+            val easiness = parts[1].toInt()
+            val tokenStr = parts[3]
+            val token = b64d(tokenStr)
+            val threshold = ((((easiness and 63) shl 1) + 1).toLong() shl ((easiness shr 6) * 7 + 3)) and 0xFFFFFFFFL
+            val buf = ByteArray(4 + 262144 * token.size)
+            for (i in 0 until 262144) System.arraycopy(token, 0, buf, 4 + i * token.size, token.size)
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            var tries = 0L
+            while (true) {
+                val h = md.digest(buf)
+                val v = ((h[0].toLong() and 0xff) shl 24) or ((h[1].toLong() and 0xff) shl 16) or ((h[2].toLong() and 0xff) shl 8) or (h[3].toLong() and 0xff)
+                if (v <= threshold) return "1:$tokenStr:" + b64e(buf.copyOfRange(0, 4))
+                // incrementa o prefixo (byte 0 primeiro, com vai-um)
+                var j = 0
+                while (j < 4) { buf[j] = (buf[j] + 1).toByte(); if (buf[j] != 0.toByte()) break; j++ }
+                if (++tries > 50_000_000L) throw MegaException(-100, "Não consegui resolver a verificação do MEGA.")
+            }
         }
 
         fun randomId(): String = (1..10).map { "abcdefghijklmnopqrstuvwxyz0123456789"[Random.nextInt(36)] }.joinToString("")
