@@ -38,6 +38,12 @@ object MegaStore {
         val j = try { org.json.JSONObject(p.getString("mega_done", "{}") ?: "{}") } catch (_: Exception) { org.json.JSONObject() }
         handles.forEach { j.remove(it) }; p.edit().putString("mega_done", j.toString()).commit()
     }
+    /** Pastas escolhidas para mandar ("Fotos", "Vídeos/2023"…). Vazio = tudo. */
+    var folders: Set<String> get() = p.getStringSet("mega_folders", emptySet())!!; set(v) = p.edit().putStringSet("mega_folders", v).apply()
+    fun wanted(path: String): Boolean {
+        val f = folders; if (f.isEmpty()) return true
+        return f.any { path == it || path.startsWith("$it/") }
+    }
     var lastError: String get() = p.getString("mega_err", "")!!; set(v) = p.edit().putString("mega_err", v).apply()
 
     fun client() = MegaClient(sid, MegaClient.b64d(key), user)
@@ -115,7 +121,7 @@ class MegaImportWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
             val all = withContext(Dispatchers.IO) { mega.fetchNodes() }
             MegaStore.nodes.value = all
             val done = MegaStore.done()
-            val todo = MegaStore.files(all).filter { it.first.handle !in done }.sortedBy { it.first.ts }
+            val todo = MegaStore.files(all).filter { it.first.handle !in done && MegaStore.wanted(it.second) }.sortedBy { it.first.ts }
             val total = todo.size + done.size
             if (todo.isEmpty()) { report(total, total, "Tudo do MEGA já está na Nuvem.", 100); return Result.success(workDataOf("summary" to "Tudo do MEGA já está na Nuvem.")) }
             val dest = Repo.ensureDestination()

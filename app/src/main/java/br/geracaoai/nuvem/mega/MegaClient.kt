@@ -120,6 +120,7 @@ class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), 
 
     // ---------- Arquivos ----------
     fun fetchNodes(): List<MegaNode> {
+        if (userHandle.isBlank()) userHandle = try { (api(JSONObject().put("a", "ug")) as JSONObject).optString("u") } catch (_: Exception) { "" }
         val r = api(JSONObject().put("a", "f").put("c", 1).put("r", 1)) as JSONObject
         val arr = r.getJSONArray("f")
         val out = ArrayList<MegaNode>(arr.length())

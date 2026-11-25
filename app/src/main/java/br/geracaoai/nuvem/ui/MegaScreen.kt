@@ -1,6 +1,7 @@
 package br.geracaoai.nuvem.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,25 +29,27 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Aba MEGA como navegador: o site do MEGA aqui dentro. Você entra, baixa o que quiser
- * e o app salva em Download/MEGA; depois sobe sozinho pra Nuvem.
+ * Aba MEGA como navegador: o site do MEGA aqui dentro. Você entra normalmente;
+ * com a sessão aberta, o painel de baixo manda os arquivos direto pro Telegram, sem ocupar o celular.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MegaPane() {
-    val ctx = LocalContext.current
     val status by MegaWeb.status.collectAsStateWithLifecycle()
     val prog by MegaWeb.progress.collectAsStateWithLifecycle()
-    val saved by MegaWeb.savedCount.collectAsStateWithLifecycle()
+    val sent by MegaWeb.sentCount.collectAsStateWithLifecycle()
     val loading by MegaWeb.loading.collectAsStateWithLifecycle()
-    var help by remember { mutableStateOf(false) }
+    val session by MegaWeb.session.collectAsStateWithLifecycle()
     val canBack by MegaWeb.canBack.collectAsStateWithLifecycle()
+    var help by remember { mutableStateOf(false) }
+    var panel by remember { mutableStateOf(false) }
     androidx.activity.compose.BackHandler(canBack) { MegaWeb.goBack() }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton({ MegaWeb.goBack() }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
             IconButton({ MegaWeb.home() }) { Icon(Icons.Rounded.Home, "Início do MEGA") }
             IconButton({ MegaWeb.reload() }) { Icon(Icons.Rounded.Refresh, "Recarregar") }
-            Text(if (saved > 0) "$saved salvos em Download/MEGA" else "mega.nz", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
+            Text(if (sent > 0) "$sent enviados pro Telegram" else "mega.nz", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             IconButton({ help = true }) { Icon(Icons.Rounded.HelpOutline, "Como funciona") }
         }
@@ -57,19 +60,35 @@ fun MegaPane() {
                 if (prog >= 0f) LinearProgressIndicator({ prog }, Modifier.fillMaxWidth().padding(top = 6.dp).clip(CircleShape))
             }
         }
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { MegaWeb.obtain(it) },
-            modifier = Modifier.fillMaxWidth().weight(1f),
-        )
+        androidx.compose.ui.viewinterop.AndroidView(factory = { MegaWeb.obtain(it) }, modifier = Modifier.fillMaxWidth().weight(1f))
+        // Painel fixo embaixo: o atalho pra mandar tudo do MEGA pro Telegram.
+        Row(
+            Modifier.fillMaxWidth().background(if (session.isNotBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainer)
+                .clickable(enabled = session.isNotBlank()) { panel = true }.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (session.isNotBlank()) Icons.Rounded.CloudSync else Icons.Rounded.Login, null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(if (session.isNotBlank()) "Mandar do MEGA direto pro Telegram" else "Entre na sua conta do MEGA acima",
+                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(if (session.isNotBlank()) "Conectado: $session • não ocupa o celular" else "Depois aparece aqui o botão pra mandar tudo pro Telegram.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+            if (session.isNotBlank()) Button({ panel = true }, contentPadding = PaddingValues(horizontal = 14.dp)) { Text("Abrir") }
+        }
+    }
+    if (panel) ModalBottomSheet({ panel = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Box(Modifier.fillMaxWidth().heightIn(max = 640.dp)) { MegaAccount { panel = false; MegaWeb.session.value = "" } }
     }
     if (help) AlertDialog({ help = false },
         title = { Text("Como trazer do MEGA") },
         text = { Text("1. Entre na sua conta do MEGA aqui (é o próprio site deles).\n" +
-            "2. Abra a pasta ou o arquivo e toque em Baixar (pode ser uma pasta inteira ou vários arquivos).\n" +
-            "3. O app salva em Download/MEGA e mostra o progresso aqui em cima. Fique nesta tela até terminar.\n" +
-            "4. Depois de salvo, sobe sozinho pra sua Nuvem do Telegram (acompanhe na faixa de backup).\n" +
-            "5. Quando estiver na Nuvem, apague no próprio MEGA e, se quiser, libere o espaço do celular.\n\n" +
-            "Conta grátis do MEGA tem limite de download por algumas horas.") },
+            "2. Toque em \"Abrir\" no painel de baixo e em \"Mandar tudo pro Telegram\" (ou escolha as pastas).\n" +
+            "3. O app baixa um arquivo por vez, sobe pro Telegram e apaga do celular na hora. Roda em segundo plano, com a tela desligada.\n" +
+            "4. Se tocar em Baixar dentro do site, aquele arquivo também vai direto pro Telegram.\n" +
+            "5. Quando estiver tudo no Telegram, use \"Tirar do MEGA\" no painel (vai pra lixeira do MEGA).\n\n" +
+            "Conta grátis do MEGA tem limite de download a cada algumas horas: o app espera e continua sozinho.") },
         confirmButton = { TextButton({ help = false }) { Text("Entendi") } })
 }
 
@@ -198,9 +217,52 @@ private fun MegaAccount(onLogout: () -> Unit) {
             }
         }
         item {
+            val topFolders = remember(files) {
+                files.map { it.second }.filter { it.isNotBlank() }.map { it.substringBefore('/') }
+                    .groupingBy { it }.eachCount().toSortedMap(String.CASE_INSENSITIVE_ORDER)
+            }
+            var choose by remember { mutableStateOf(false) }
+            var chosen by remember { mutableStateOf(MegaStore.folders) }
+            GlassCard(onClick = { choose = true }, padding = 14.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.FolderOpen, null, tint = Nv.Gold)
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Pastas do MEGA", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text(if (chosen.isEmpty()) "Todas" else chosen.sorted().joinToString(", "), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                    }
+                    TextButton({ choose = true }) { Text("Escolher") }
+                }
+            }
+            if (choose) AlertDialog({ choose = false },
+                title = { Text("Quais pastas mandar?") },
+                text = {
+                    LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                        item {
+                            Row(Modifier.fillMaxWidth().clickable { chosen = emptySet() }, verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(chosen.isEmpty(), { chosen = emptySet() }); Text("Todas")
+                            }
+                        }
+                        topFolders.forEach { (name, n) ->
+                            item {
+                                val on = name in chosen
+                                Row(Modifier.fillMaxWidth().clickable { chosen = if (on) chosen - name else chosen + name }, verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(on, { chosen = if (on) chosen - name else chosen + name })
+                                    Text(name, Modifier.weight(1f), maxLines = 1)
+                                    Text("$n", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { Button({ MegaStore.folders = chosen; choose = false }) { Text("Salvar") } },
+                dismissButton = { TextButton({ chosen = MegaStore.folders; choose = false }) { Text("Cancelar") } })
+        }
+        item {
             GlassCard(padding = 16.dp) {
-                Text("1. Trazer tudo pra Nuvem", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text("Baixa um arquivo por vez e manda pro seu Telegram, no álbum \"MEGA\" com as mesmas pastas. Roda em segundo plano, com a tela desligada.",
+                Text("1. Mandar pro Telegram", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text("Um arquivo por vez: baixa do MEGA, sobe pro Telegram (álbum \"MEGA\", mesmas pastas) e apaga do celular na hora. Não enche o celular. Roda em segundo plano, com a tela desligada.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(10.dp))
                 if (running != null) {
@@ -216,7 +278,7 @@ private fun MegaAccount(onLogout: () -> Unit) {
                     Spacer(Modifier.height(6.dp))
                     Button({ MegaImport.start(ctx) }, Modifier.fillMaxWidth(), enabled = all != null && done.size < files.size) {
                         Icon(Icons.Rounded.CloudDownload, null); Spacer(Modifier.width(8.dp))
-                        Text(if (done.isEmpty()) "Trazer tudo do MEGA" else "Continuar (${files.size - done.size} faltando)")
+                        Text(if (done.isEmpty()) "Mandar tudo pro Telegram" else "Continuar (${files.size - done.size} faltando)")
                     }
                 }
                 Spacer(Modifier.height(6.dp))
