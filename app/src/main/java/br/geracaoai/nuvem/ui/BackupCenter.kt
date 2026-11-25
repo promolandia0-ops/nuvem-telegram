@@ -141,6 +141,10 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
     var buckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
     var removeFolder by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { buckets = withContext(Dispatchers.IO) { try { LocalMedia.buckets(ctx) } catch (_: Exception) { emptyList() } } }
+    var cleanup by remember { mutableStateOf<List<LocalItem>?>(null) }
+    var loadingFree by remember { mutableStateOf(false) }
+    var freeEmpty by remember { mutableStateOf(false) }
+    CleanupFlow(cleanup) { _ -> cleanup = null }
     fun applyPrefs() {
         Prefs.backupAll = all; Prefs.folders = mediaSel; Prefs.autoBackup = auto; Prefs.wifiOnly = wifi
         Prefs.chargingOnly = charging; Prefs.instantBackup = instant
@@ -207,6 +211,31 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                                     Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(6.dp)); Text("Fazer backup agora")
                                 }
                             }
+                        }
+                    }
+                }
+                item(key = "free") {
+                    GlassCard(onClick = {
+                        if (loadingFree || s.running) return@GlassCard
+                        loadingFree = true
+                        scope.launch {
+                            val list = withContext(Dispatchers.IO) { try { Repo.freeableQuick(ctx).items } catch (_: Exception) { emptyList() } }
+                            loadingFree = false
+                            if (list.isEmpty()) freeEmpty = true else cleanup = list
+                        }
+                    }, padding = 14.dp) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.CleaningServices, null, tint = Nv.Gold)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Liberar espaço do celular", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(when {
+                                    s.running -> "Espere o backup terminar."
+                                    loadingFree -> "Procurando o que já está na nuvem…"
+                                    else -> "Mostra quantos GB saem, confere cada arquivo na nuvem e mede o espaço livre antes e depois."
+                                }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            if (loadingFree) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Rounded.ChevronRight, null)
                         }
                     }
                 }
@@ -283,6 +312,9 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
             }
         }
     }
+    if (freeEmpty) AlertDialog({ freeEmpty = false }, confirmButton = { TextButton({ freeEmpty = false }) { Text("OK") } },
+        title = { Text("Nada pra liberar agora") },
+        text = { Text("Não achei no celular nenhum arquivo que já esteja salvo na nuvem. Faça o backup primeiro; depois volte aqui.") })
     removeFolder?.let { path ->
         AlertDialog({ removeFolder = null },
             title = { Text("Tirar \"${path.substringAfterLast('/')}\" do backup?") },

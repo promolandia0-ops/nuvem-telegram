@@ -291,6 +291,8 @@ fun FreeUpCard(modifier: Modifier = Modifier) {
         }
         checking = false
     }
+    var cleanup by remember { mutableStateOf<List<LocalItem>?>(null) }
+    CleanupFlow(cleanup) { _ -> cleanup = null; refresh++ }
     var phase by remember { mutableStateOf<String?>(null) }  // null, "verify", "confirm"
     var progress by remember { mutableIntStateOf(0) }
     var verified by remember { mutableStateOf<List<LocalItem>>(emptyList()) }
@@ -307,14 +309,7 @@ fun FreeUpCard(modifier: Modifier = Modifier) {
     FreeUpBody(
         checking = checking, running = running,
         itemCount = f?.items?.size ?: 0, bytes = f?.bytes ?: 0L,
-        onLiberar = {
-            val cur = f ?: return@FreeUpBody
-            phase = "verify"; progress = 0
-            scope.launch {
-                verified = Repo.verifyForDelete(cur.items) { progress = it }
-                phase = "confirm"
-            }
-        },
+        onLiberar = { cleanup = f?.items },
         modifier = modifier,
     )
     if (phase == "verify" && f != null) AlertDialog({}, confirmButton = {}, title = { Text("Verificando backup…") }, text = {

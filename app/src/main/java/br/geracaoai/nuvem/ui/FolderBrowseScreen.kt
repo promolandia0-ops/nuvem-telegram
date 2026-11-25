@@ -139,9 +139,13 @@ fun FolderBrowseBody(
         } else result = "Nada foi apagado."
     }
 
+    var cleanup by remember { mutableStateOf<List<LocalItem>?>(null) }
+    CleanupFlow(cleanup) { _ -> cleanup = null; selected = FolderMedia.deselectAll(); onTrashed() }
+
     fun startLiberar() {
         val chosen = FolderMedia.selectedLocals(shown, selected)
         if (chosen.isEmpty() || running) return
+        if (verifyInBody) { cleanup = chosen; return }
         if (!verifyInBody) {
             phase = "confirm"
             verified = chosen

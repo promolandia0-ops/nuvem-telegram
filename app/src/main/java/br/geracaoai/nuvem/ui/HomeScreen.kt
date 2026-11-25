@@ -318,44 +318,10 @@ fun BackupScreen(
     }
     if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = { onBrowseFolder(it) }, folders = folders)
 
-    if (confirmFree) AlertDialog(
-        onDismissRequest = { if (!verifyingFree) confirmFree = false },
-        title = { Text("Liberar espaço?") },
-        text = {
-            val s = summary
-            Column {
-                Text("${s?.freeableCount ?: 0} arquivos já salvos no Telegram (${fmtBytes(s?.freeableBytes ?: 0)}). Vão pra lixeira do celular, depois de conferir no Telegram. Dá pra recuperar por uns 30 dias.")
-                if (verifyingFree) {
-                    Spacer(Modifier.height(12.dp))
-                    Text("Conferindo ${verifyProg} de ${verifyTotal}…")
-                    LinearProgressIndicator({ if (verifyTotal <= 0) 0f else verifyProg / verifyTotal.toFloat() }, Modifier.fillMaxWidth())
-                }
-            }
-        },
-        confirmButton = {
-            Button(enabled = !verifyingFree && (summary?.freeableCount ?: 0) > 0, onClick = {
-                val chosen = summary?.freeable.orEmpty()
-                verifyingFree = true; verifyProg = 0; verifyTotal = chosen.size
-                scope.launch {
-                    val ok = try { Repo.verifyForDelete(chosen) { verifyProg = it } } catch (_: Exception) { emptyList() }
-                    verifiedFree = ok
-                    verifyingFree = false
-                    val skipped = chosen.size - ok.size
-                    if (ok.isEmpty()) {
-                        confirmFree = false
-                        freeMsg = if (skipped > 0) "Nenhum arquivo passou na conferência do Telegram. Nada foi apagado." else "Não achei arquivos pra liberar."
-                    } else {
-                        val intent = SafeTrash.intent(ctx, ok.map { it.uri })
-                        if (intent == null) {
-                            confirmFree = false
-                            freeMsg = "Não deu pra abrir a lixeira do sistema."
-                        } else trashLauncher.launch(IntentSenderRequest.Builder(intent).build())
-                    }
-                }
-            }) { Text("Sim") }
-        },
-        dismissButton = { TextButton(enabled = !verifyingFree, onClick = { confirmFree = false; showFree = true }) { Text("Ver") } },
-    )
+    CleanupFlow(if (confirmFree) summary?.freeable.orEmpty() else null) { _ ->
+        confirmFree = false
+        scope.launch { DiscoverStore.refresh(ctx) }
+    }
     freeMsg?.let { msg -> AlertDialog({ freeMsg = null }, confirmButton = { TextButton({ freeMsg = null }) { Text("OK") } }, text = { Text(msg) }) }
     if (showDups) ModalBottomSheet({ showDups = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.testTag(FeatureTags.PANE_DUPLICADAS).padding(16.dp).navigationBarsPadding()) {

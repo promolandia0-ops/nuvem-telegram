@@ -846,7 +846,12 @@ object Repo {
     /** Estimativa rápida (usa hashes em cache): itens locais cujo hash+tamanho já estão na nuvem. */
     fun freeableQuick(c: Context): Freeable {
         if (Prefs.destChats().isEmpty()) return Freeable(emptyList(), 0)
-        val items = LocalMedia.all(c).filter { i ->
+        val media = LocalMedia.all(c)
+        // Arquivos das pastas do modo Arquivos (PDF, ZIP, áudio…) que já subiram.
+        val files = try { FileScan.keys().flatMap { FileScan.walk(it) } } catch (_: Exception) { emptyList() }
+        val seen = HashSet<String>()
+        val items = (media + files).filter { i ->
+            if (!seen.add(i.path)) return@filter false
             val h = Db.cachedHash(i.path, i.size, i.mtime) ?: return@filter false
             Db.anyByHash(h, i.size) != null
         }
