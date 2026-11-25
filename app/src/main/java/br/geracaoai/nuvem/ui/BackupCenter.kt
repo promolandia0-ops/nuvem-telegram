@@ -48,7 +48,11 @@ data class BackupUiState(
     val bytesTotal: Long = 0,
     val phase: String = "",
     val queued: Boolean = false,
+    val speed: Long = 0,
 ) {
+    val etaSec: Long get() = if (speed > 0 && bytesTotal > bytesDone) (bytesTotal - bytesDone) / speed else 0
+    /** "4,2 MB/s • faltam ~12 min" (vazio até ter medida). */
+    val speedLine: String get() = if (speed > 0) Backup.fmtSpeed(speed) + (if (etaSec > 0) " • faltam ${Backup.fmtEta(etaSec)}" else "") else ""
     /** Progresso geral: por GB quando dá (mais honesto com vídeo grande), senão por arquivo. */
     val fraction get() = when {
         bytesTotal > 0 -> (bytesDone / bytesTotal.toDouble()).toFloat().coerceIn(0f, 1f)
@@ -74,7 +78,7 @@ fun rememberBackupState(): BackupUiState {
     // Ao vivo (mesmo processo do backup): número certo na hora, igual à notificação.
     lv?.let { l ->
         if (!paused) return BackupUiState(true, false, l.done, l.total, l.name, l.filePct, if (isCancelMessage(error)) "" else error,
-            l.bytesDone, l.bytesTotal, l.phase, false)
+            l.bytesDone, l.bytesTotal, l.phase, false, l.speed)
     }
     val w = if (paused) null else (now + per + cont).firstOrNull { it.state == WorkInfo.State.RUNNING }
     val queued = !paused && w == null && (now + cont).any { it.state == WorkInfo.State.ENQUEUED }
@@ -162,8 +166,8 @@ fun BackupBanner(onClick: () -> Unit) {
         s.running && conn != "ready" -> Quad4(Icons.Rounded.Sync, Nv.Gold, "Reconectando ao Telegram…",
             "O envio continua sozinho assim que conectar (${s.percent}% feito)")
         s.running -> Quad4(Icons.Rounded.CloudUpload, MaterialTheme.colorScheme.primary,
-            "Enviando ${s.percent}% • ${s.done} de ${s.total}",
-            (if (s.bytesTotal > 0) "${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)} • " else "") + s.name)
+            "Enviando ${s.percent}% • ${s.done} de ${s.total}" + if (s.speed > 0) " • ${Backup.fmtSpeed(s.speed)}" else "",
+            (if (s.etaSec > 0) "Faltam ${Backup.fmtEta(s.etaSec)} • " else "") + (if (s.bytesTotal > 0) "${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)} • " else "") + s.name)
         s.queued -> Quad4(Icons.Rounded.Schedule, Nv.Gold, "Backup na fila", reason)
         mega.running -> Quad4(Icons.Rounded.CloudSync, MaterialTheme.colorScheme.primary, "MEGA → Telegram" + if (mega.pending > 0) " • ${mega.pending} na fila" else "",
             mega.text.ifBlank { "Subindo do MEGA pro Telegram…" })
@@ -215,6 +219,8 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
     var instant by remember { mutableStateOf(Prefs.instantBackup) }
     var buckets by remember { mutableStateOf<List<Bucket>>(emptyList()) }
     var removeFolder by remember { mutableStateOf<String?>(null) }
+    var estimateAsk by remember { mutableStateOf(false) }
+    var estimate by remember { mutableStateOf<AllEstimate?>(null) }
     LaunchedEffect(Unit) { buckets = withContext(Dispatchers.IO) { try { LocalMedia.buckets(ctx) } catch (_: Exception) { emptyList() } } }
     val freeSpace = rememberFreeSpace()
     val loadingFree = false
@@ -270,6 +276,7 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                                 Text("${s.done} de ${s.total} arquivos", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                                 if (s.bytesTotal > 0) Text("${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)}", style = MaterialTheme.typography.bodySmall)
                             }
+                            if (s.speedLine.isNotBlank()) Text(s.speedLine, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                             if (s.pct in 1..99) {
                                 Spacer(Modifier.height(4.dp))
                                 Text("Arquivo atual: ${s.pct}%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -334,6 +341,7 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                             }
                             Spacer(Modifier.width(8.dp))
                             AuroraSwitch(allOn) { on ->
+                                if (on) { estimateAsk = true; return@AuroraSwitch }
                                 if (on) {
                                     all = true
                                     if (AllFilesAccess.granted()) { Prefs.fileFolders = Prefs.fileFolders + FileScan.rootPath() }
@@ -355,12 +363,14 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                 item(key = "fila") {
                     val q by BackupQueue.items.collectAsStateWithLifecycle()
                     val mega = rememberMegaState()
-                    if (q.isNotEmpty() || mega.running) GlassCard(padding = 14.dp) {
+                    var showQ by remember { mutableStateOf(false) }
+                    if (showQ) QueueSheet { showQ = false }
+                    if (q.isNotEmpty() || mega.running) GlassCard(onClick = { if (q.isNotEmpty()) showQ = true }, padding = 14.dp) {
                         Text("Fila do backup", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         if (q.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.PlaylistAdd, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
                             Text("Escolhidos: ${BackupQueue.describe()}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            TextButton({ BackupQueue.clear() }) { Text("Tirar da fila") }
+                            TextButton({ showQ = true }) { Text("Ver") }
                         }
                         if (mega.running) Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.CloudSync, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
@@ -438,12 +448,95 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
             }
         }
     }
+    if (estimateAsk) {
+        LaunchedEffect(Unit) { estimate = null; estimate = withContext(Dispatchers.IO) { estimateAll(ctx) } }
+        val e = estimate
+        AlertDialog({ estimateAsk = false },
+            icon = { Icon(Icons.Rounded.AllInclusive, null) },
+            title = { Text("Ligar o backup de tudo?") },
+            text = {
+                if (e == null) Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(22.dp)); Spacer(Modifier.width(12.dp)); Text("Medindo o que tem no celular…")
+                } else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Fotos e vídeos: ${e.mediaN} • ${fmtBytes(e.mediaBytes)}")
+                    Text(if (e.filesKnown) "Arquivos que pesam: ${e.filesN} • ${fmtBytes(e.filesBytes)}" else "Arquivos: precisa liberar \"Acesso a todos os arquivos\" (vou abrir a tela)")
+                    Text("Já na nuvem: ${e.cloudN} • ${fmtBytes(e.cloudBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    HorizontalDivider()
+                    Text("Vai mandar ~${fmtBytes((e.mediaBytes + e.filesBytes - e.cloudBytes).coerceAtLeast(0))}", fontWeight = FontWeight.SemiBold)
+                    Text("Fica de fora: ícones, miniaturas, cache, logs e arquivos menores que 1 MB.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = { Button(enabled = e != null, onClick = {
+                estimateAsk = false
+                all = true
+                if (AllFilesAccess.granted()) Prefs.fileFolders = Prefs.fileFolders + FileScan.rootPath()
+                else try { ctx.startActivity(AllFilesAccess.intent(ctx).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                fileFolders = Prefs.fileFolders
+                applyPrefs(); Backup.runNow(ctx, true)
+            }) { Text("Ligar") } },
+            dismissButton = { TextButton({ estimateAsk = false }) { Text("Cancelar") } })
+    }
     removeFolder?.let { path ->
         AlertDialog({ removeFolder = null },
             title = { Text("Tirar \"${path.substringAfterLast('/')}\" do backup?") },
             text = { Text("Arquivos novos dessa pasta não sobem mais. O que já foi enviado continua na nuvem.") },
             confirmButton = { Button({ Prefs.fileFolders = Prefs.fileFolders - path; fileFolders = Prefs.fileFolders; removeFolder = null }) { Text("Tirar") } },
             dismissButton = { TextButton({ removeFolder = null }) { Text("Cancelar") } })
+    }
+}
+
+data class AllEstimate(val mediaN: Int, val mediaBytes: Long, val filesN: Int, val filesBytes: Long, val filesKnown: Boolean, val cloudN: Int, val cloudBytes: Long)
+
+/** Mede o "backup de tudo": fotos/vídeos (sem ícones), arquivos que pesam e o que já está na nuvem. */
+fun estimateAll(c: android.content.Context): AllEstimate {
+    val media = try { MediaScan.allAnywhere(c) } catch (_: Exception) { emptyList() }
+    val known = AllFilesAccess.granted()
+    val root = FileScan.rootPath()
+    val files = if (!known) emptyList() else {
+        val dirs = (java.io.File(root).listFiles() ?: emptyArray()).filter { it.isDirectory && !it.name.startsWith(".") && !it.name.equals("Android", true) }
+        dirs.flatMap { try { FileScan.walk(FileScan.SMART + it.absolutePath) } catch (_: Exception) { emptyList() } } +
+            (try { FileScan.walk(FileScan.FLAT + root) } catch (_: Exception) { emptyList() })
+    }
+    val cloud = try { Db.allCloudMany(Prefs.allKnownChats()).map { it.name to it.size }.toHashSet() } catch (_: Exception) { hashSetOf() }
+    val inCloud = (media + files).filter { (it.name to it.size) in cloud }
+    return AllEstimate(media.size, media.sumOf { it.size }, files.size, files.sumOf { it.size }, known, inCloud.size, inCloud.sumOf { it.size })
+}
+
+/** Lista do que está na fila (escolhido na mão), com X pra tirar cada um. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun QueueSheet(onClose: () -> Unit) {
+    val q by BackupQueue.items.collectAsStateWithLifecycle()
+    ModalBottomSheet(onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).navigationBarsPadding()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Fila do backup", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                if (q.isNotEmpty()) TextButton({ BackupQueue.clear() }) { Text("Tirar tudo") }
+            }
+            Text("Sobem na próxima rodada do backup, junto com o automático.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            if (q.isEmpty()) Text("Nada na fila.", Modifier.padding(vertical = 24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LazyColumn(Modifier.heightIn(max = 480.dp)) {
+                items(q.sorted(), key = { it }) { e ->
+                    val (icon, title, sub) = when {
+                        e.startsWith("bucket:") -> Triple(Icons.Rounded.PhotoAlbum, folderLabel(e.removePrefix("bucket:")), "Álbum do celular")
+                        e.startsWith("dir:") -> Triple(Icons.Rounded.Folder, e.removePrefix("dir:").substringAfterLast('/'), FileScan.relOf(e.removePrefix("dir:")).ifBlank { "Pasta" })
+                        else -> Triple(Icons.Rounded.InsertDriveFile, e.removePrefix("file:").substringAfterLast('/'),
+                            fmtBytes(java.io.File(e.removePrefix("file:")).length()) + " • " + FileScan.relOf(e.removePrefix("file:").substringBeforeLast('/')))
+                    }
+                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(icon, null, tint = Nv.Gold)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton({ BackupQueue.remove(listOf(e)) }) { Icon(Icons.Rounded.Close, "Tirar da fila") }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
     }
 }
 

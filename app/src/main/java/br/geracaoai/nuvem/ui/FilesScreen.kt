@@ -108,7 +108,14 @@ private fun PhoneBrowser() {
     var askRemove by remember { mutableStateOf<File?>(null) }
     var sel by remember { mutableStateOf(setOf<String>()) }
     val selecting = sel.isNotEmpty()
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     fun toggle(p: String) { sel = if (p in sel) sel - p else sel + p }
+    fun press(p: String) { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); toggle(p) }
+    val queue by BackupQueue.items.collectAsStateWithLifecycle()
+    // Nomes+tamanhos que já estão na nuvem (pra marcar ✓ nos arquivos).
+    val ver by Db.version.collectAsStateWithLifecycle()
+    var onCloud by remember { mutableStateOf<Set<Pair<String, Long>>>(emptySet()) }
+    LaunchedEffect(ver) { onCloud = withContext(Dispatchers.IO) { try { Db.allCloudMany(Prefs.allKnownChats()).map { it.name to it.size }.toHashSet() } catch (_: Exception) { emptySet() } } }
     val life = LocalLifecycleOwner.current
     DisposableEffect(life) {
         val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) access = AllFilesAccess.granted() }
@@ -200,7 +207,13 @@ private fun PhoneBrowser() {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton({ sel = emptySet() }) { Icon(Icons.Rounded.Close, "Cancelar seleção") }
-        Text("${sel.size} selecionado${if (sel.size == 1) "" else "s"}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        val selBytes = (entries ?: emptyList()).filter { !it.isDir && it.file.absolutePath in sel }.sumOf { it.size }
+        val selDirs = sel.count { p -> (entries ?: emptyList()).any { it.isDir && it.file.absolutePath == p } }
+        Column(Modifier.weight(1f)) {
+            Text("${sel.size} selecionado${if (sel.size == 1) "" else "s"}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(listOfNotNull(if (selBytes > 0) fmtBytes(selBytes) else null, if (selDirs > 0) "$selDirs ${if (selDirs == 1) "pasta inteira" else "pastas inteiras"}" else null).joinToString(" + "),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         TextButton({ sel = sel + (entries ?: emptyList()).map { it.file.absolutePath } }) { Text("Tudo") }
         Button({
             val dirs = sel.filter { File(it).isDirectory }; val files = sel.filter { File(it).isFile }
@@ -234,9 +247,10 @@ private fun PhoneBrowser() {
         items(list, key = { it.file.absolutePath }) { e ->
             if (e.isDir) {
                 val inBackup = remember(e.file.absolutePath, foldersVer) { FileScan.isCovered(e.file.absolutePath) }
-                FileRow(Icons.Rounded.Folder, Nv.Gold, e.file.name, "${e.children} ${if (e.children == 1) "item" else "itens"}",
+                val queued = "dir:${e.file.absolutePath.trimEnd('/')}" in queue
+                FileRow(Icons.Rounded.Folder, Nv.Gold, e.file.name, "${e.children} ${if (e.children == 1) "item" else "itens"}" + if (queued) " • na fila do backup" else "",
                     onClick = { if (selecting) toggle(e.file.absolutePath) else path = e.file.absolutePath },
-                    onLongClick = { toggle(e.file.absolutePath) }, selected = e.file.absolutePath in sel) {
+                    onLongClick = { press(e.file.absolutePath) }, selected = e.file.absolutePath in sel) {
                     IconButton({
                         if (!inBackup) ask = e.file
                         else if (e.file.absolutePath in Prefs.fileFolders) askRemove = e.file
@@ -248,9 +262,14 @@ private fun PhoneBrowser() {
                 }
             } else {
                 val (icon, tone) = fileIcon(e.file.name)
-                FileRow(icon, tone, e.file.name, "${fmtBytes(e.size)} • ${fileDateFmt.format(Date(e.mtime))}",
+                val inCloud = (e.file.name to e.size) in onCloud
+                val queued = "file:${e.file.absolutePath}" in queue
+                FileRow(icon, tone, e.file.name, "${fmtBytes(e.size)} • ${fileDateFmt.format(Date(e.mtime))}" + when { inCloud -> " • na nuvem"; queued -> " • na fila"; else -> "" },
                     onClick = { if (selecting) toggle(e.file.absolutePath) else openLocalFile(ctx, e.file) },
-                    onLongClick = { toggle(e.file.absolutePath) }, selected = e.file.absolutePath in sel) {}
+                    onLongClick = { press(e.file.absolutePath) }, selected = e.file.absolutePath in sel) {
+                    if (inCloud) Icon(Icons.Rounded.CloudDone, "Já na nuvem", Modifier.padding(end = 12.dp).size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                    else if (queued) Icon(Icons.Rounded.Schedule, "Na fila", Modifier.padding(end = 12.dp).size(20.dp), tint = Nv.Gold)
+                }
             }
         }
     }

@@ -129,7 +129,9 @@ object Backup {
     }
 
     /** Progresso ao vivo (memória): a tela e a notificação leem daqui, sem atraso. */
-    data class Live(val done: Int, val total: Int, val name: String, val filePct: Int, val bytesDone: Long, val bytesTotal: Long, val phase: String) {
+    data class Live(val done: Int, val total: Int, val name: String, val filePct: Int, val bytesDone: Long, val bytesTotal: Long, val phase: String, val speed: Long = 0) {
+        /** Segundos pra terminar, pela velocidade média recente (0 = ainda não dá pra saber). */
+        val etaSec: Long get() = if (speed > 0 && bytesTotal > bytesDone) (bytesTotal - bytesDone) / speed else 0
         val fraction: Float get() = when {
             bytesTotal > 0 -> (bytesDone.toDouble() / bytesTotal).toFloat().coerceIn(0f, 1f)
             total > 0 -> (done.toFloat() / total).coerceIn(0f, 1f)
@@ -138,6 +140,17 @@ object Backup {
         val percent: Int get() = (fraction * 100).toInt()
     }
     val live = kotlinx.coroutines.flow.MutableStateFlow<Live?>(null)
+
+    fun fmtSpeed(bps: Long): String = when {
+        bps >= 1024L * 1024 -> String.format(java.util.Locale("pt", "BR"), "%.1f MB/s", bps / 1048576.0)
+        else -> "${(bps / 1024).coerceAtLeast(1)} KB/s"
+    }
+    fun fmtEta(sec: Long): String = when {
+        sec < 60 -> "menos de 1 min"
+        sec < 3600 -> "~${sec / 60} min"
+        sec < 86400 -> "~${sec / 3600} h ${(sec % 3600) / 60} min"
+        else -> "~${sec / 86400} dias"
+    }
 
     /** Falha de rede ou de tempo (o próprio backup tenta de novo): não mostrar como erro. */
     fun isTransient(e: Throwable): Boolean {
@@ -309,12 +322,23 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         Prefs.lastError = ""
         var bytesDone = 0L; var bytesTotal = 0L; var phase = "prep"
         var partial = 0L; var lastPush = 0L; var lastKey = ""
+        // velocidade: média móvel dos bytes enviados de verdade (pula os já-na-nuvem, que contam rápido)
+        var spdBytes = -1L; var spdAt = 0L; var speed = 0.0
         val fileKeysAtStart = FileScan.keys(); val mediaAtStart = Prefs.folders + Prefs.secretFolders; val allAtStart = Prefs.backupAll
         val queueAtStart = BackupQueue.current()
         // [pct] = % do arquivo atual. A tela lê o ao vivo na hora; banco e notificação no máximo 1x por segundo.
         fun report(d: Int, total: Int, name: String, pct: Int) {
             Backup.beat()
-            val lv = Backup.Live(d, total, name, pct, (bytesDone + partial).let { if (bytesTotal > 0) it.coerceAtMost(bytesTotal) else it }, bytesTotal, phase)
+            val cur = (bytesDone + partial).let { if (bytesTotal > 0) it.coerceAtMost(bytesTotal) else it }
+            val tNow = SystemClock.elapsedRealtime()
+            if (phase == "send" && partial > 0) {
+                if (spdBytes in 0..cur && tNow - spdAt >= 1500) {
+                    val inst = (cur - spdBytes) * 1000.0 / (tNow - spdAt)
+                    if (inst in 1.0..2e9) speed = if (speed <= 0) inst else speed * 0.7 + inst * 0.3
+                    spdBytes = cur; spdAt = tNow
+                } else if (spdBytes < 0 || cur < spdBytes) { spdBytes = cur; spdAt = tNow }
+            } else { spdBytes = -1L }
+            val lv = Backup.Live(d, total, name, pct, cur, bytesTotal, phase, speed.toLong())
             Backup.live.value = lv
             val now = SystemClock.elapsedRealtime()
             val key = "$phase|$d|$total"
@@ -322,7 +346,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             lastPush = now; lastKey = key
             setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct,
                 "bytesDone" to lv.bytesDone, "bytesTotal" to bytesTotal, "phase" to phase))
-            val text = if (pct in 1..99 && total > 0) "$name • arquivo $pct%" else name
+            val extra = if (lv.speed > 0) " • ${fmtSpeed(lv.speed)}" + (if (lv.etaSec > 0) " • faltam ${fmtEta(lv.etaSec)}" else "") else ""
+            val text = (if (pct in 1..99 && total > 0) "$name • arquivo $pct%" else name) + extra
             try {
                 setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(text, d, total, lv.percent), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
             } catch (_: Exception) {}

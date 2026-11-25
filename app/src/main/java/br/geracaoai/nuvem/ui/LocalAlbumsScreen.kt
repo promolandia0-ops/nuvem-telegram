@@ -59,6 +59,7 @@ fun LocalAlbumsScreen(actions: @Composable RowScope.() -> Unit, header: @Composa
     var albums by remember { mutableStateOf<List<LocalAlbum>?>(null) }
     var sel by remember { mutableStateOf(setOf<String>()) }
     val queue by BackupQueue.items.collectAsStateWithLifecycle()
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     LaunchedEffect(ver) {
         albums = withContext(Dispatchers.IO) {
             try {
@@ -109,7 +110,7 @@ fun LocalAlbumsScreen(actions: @Composable RowScope.() -> Unit, header: @Composa
                         .then(if (on) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp)) else Modifier)
                         .combinedClickable(
                             onClick = { if (sel.isNotEmpty()) sel = if (on) sel - a.name else sel + a.name else onBrowseFolder(a.name) },
-                            onLongClick = { sel = if (on) sel - a.name else sel + a.name },
+                            onLongClick = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); sel = if (on) sel - a.name else sel + a.name },
                         ).padding(8.dp)
                 ) {
                     Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
