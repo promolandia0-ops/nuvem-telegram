@@ -13,13 +13,32 @@ object FileScan {
     private const val MAX_FILES = 200_000
     private val SKIP_DIRS = setOf(".thumbnails", ".thumbnail", ".trash", ".cache", "cache")
 
-    fun keyFor(path: String) = PREFIX + path.trimEnd('/')
-    fun isKey(key: String) = key.startsWith(PREFIX)
-    fun pathOf(key: String) = key.removePrefix(PREFIX)
-    fun nameOf(key: String) = pathOf(key).substringAfterLast('/').ifBlank { "Arquivos" }
+    /** Só os arquivos soltos na raiz do armazenamento (sem subpastas). */
+    const val FLAT = "dirflat:"
 
-    /** Pastas marcadas para backup no modo Arquivos (caminhos absolutos). */
-    fun keys(): Set<String> = Prefs.fileFolders.map { keyFor(it) }.toSet()
+    fun keyFor(path: String) = PREFIX + path.trimEnd('/')
+    fun isKey(key: String) = key.startsWith(PREFIX) || key.startsWith(FLAT)
+    fun pathOf(key: String) = key.removePrefix(PREFIX).removePrefix(FLAT)
+    fun nameOf(key: String) = if (key.startsWith(FLAT)) "Celular" else pathOf(key).substringAfterLast('/').ifBlank { "Arquivos" }
+
+    /** Raiz do armazenamento (/storage/emulated/0): "todos os arquivos do celular". */
+    fun rootPath(): String = (LocalMedia.storageRoots().firstOrNull() ?: File("/storage/emulated/0")).absolutePath.trimEnd('/')
+    fun isRoot(path: String): Boolean = path.trimEnd('/').let { it == rootPath() || it == "/storage/emulated/0" }
+    val allPhone get() = Prefs.fileFolders.any { isRoot(it) }
+
+    /**
+     * Pastas marcadas para backup no modo Arquivos.
+     * O celular inteiro vira uma chave por pasta principal (Documents, Download…), cada uma no seu álbum,
+     * mais os arquivos soltos da raiz. A pasta Android/ (dados de apps) e as ocultas ficam de fora.
+     */
+    fun keys(): Set<String> = Prefs.fileFolders.flatMap { p ->
+        if (!isRoot(p)) listOf(keyFor(p))
+        else {
+            val dirs = (try { File(p).listFiles() } catch (_: Exception) { null } ?: emptyArray())
+                .filter { it.isDirectory && !it.name.startsWith(".") && !it.name.equals("Android", true) }
+            dirs.map { keyFor(it.absolutePath) } + (FLAT + p.trimEnd('/'))
+        }
+    }.toSet()
 
     /** A pasta (ou uma pasta acima dela) já está no backup? */
     fun isCovered(path: String): Boolean {
@@ -39,6 +58,7 @@ object FileScan {
         val root = File(pathOf(key))
         if (!root.isDirectory) return emptyList()
         val album = nameOf(key)
+        val recursive = !key.startsWith(FLAT)
         val out = ArrayList<LocalItem>()
         val stack = ArrayDeque<File>()
         stack.add(root)
@@ -47,7 +67,7 @@ object FileScan {
             val list = try { d.listFiles() } catch (_: Exception) { null } ?: continue
             for (f in list) {
                 if (f.isDirectory) {
-                    if (f.name.lowercase() in SKIP_DIRS) continue
+                    if (!recursive || f.name.startsWith(".") || f.name.lowercase() in SKIP_DIRS) continue
                     stack.addLast(f)
                 } else if (f.isFile) {
                     val size = try { f.length() } catch (_: Exception) { 0L }

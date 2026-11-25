@@ -131,6 +131,45 @@ private fun PhoneBrowser() {
     }
 
     val covered = remember(path, foldersVer) { FileScan.isCovered(path) }
+    val allOn = remember(foldersVer) { FileScan.allPhone }
+    var askAll by remember { mutableStateOf(false) }
+    var askAllOff by remember { mutableStateOf(false) }
+    // Um toque: o celular inteiro vai pro backup (todas as pastas, qualquer tipo de arquivo).
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clip(RoundedCornerShape(14.dp))
+            .background(if (allOn) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceContainer)
+            .clickable { if (allOn) askAllOff = true else askAll = true }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (allOn) Icons.Rounded.CloudDone else Icons.Rounded.CloudUpload, null, tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(if (allOn) "Todos os arquivos estão no backup" else "Fazer backup de todos os arquivos", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(if (allOn) "Arquivos novos sobem sozinhos. Toque pra desligar." else "Um toque: todas as pastas do celular, qualquer tipo de arquivo.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (!allOn) Button({ askAll = true }, contentPadding = PaddingValues(horizontal = 14.dp)) { Text("Fazer") }
+    }
+    if (askAll) AlertDialog({ askAll = false },
+        icon = { Icon(Icons.Rounded.CloudUpload, null) },
+        title = { Text("Fazer backup de todos os arquivos?") },
+        text = { Text("Todas as pastas do celular vão pra nuvem: documentos, downloads, WhatsApp, PDFs, ZIPs, áudios… Cada pasta principal vira um álbum. Fica de fora só a pasta Android (dados de apps) e pastas ocultas. Arquivos novos também sobem sozinhos.\n\nPode levar horas na primeira vez; roda em segundo plano.") },
+        confirmButton = { Button({
+            Prefs.fileFolders = Prefs.fileFolders + FileScan.rootPath()
+            foldersVer++; askAll = false
+            scope.launch(Dispatchers.IO) { Backup.runNow(ctx, true) }
+            Toast.makeText(ctx, "Backup de todos os arquivos começou.", Toast.LENGTH_SHORT).show()
+        }) { Text("Fazer backup") } },
+        dismissButton = { TextButton({ askAll = false }) { Text("Cancelar") } })
+    if (askAllOff) AlertDialog({ askAllOff = false },
+        title = { Text("Parar o backup de todos os arquivos?") },
+        text = { Text("Arquivos novos param de subir (as pastas que você marcou uma por uma continuam). O que já foi enviado continua na nuvem.") },
+        confirmButton = { Button({
+            Prefs.fileFolders = Prefs.fileFolders.filterNot { FileScan.isRoot(it) }.toSet()
+            foldersVer++; askAllOff = false
+        }) { Text("Parar") } },
+        dismissButton = { TextButton({ askAllOff = false }) { Text("Cancelar") } })
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (!atRoot) IconButton({ path = dir.parentFile?.absolutePath ?: root.absolutePath }) { Icon(Icons.Rounded.ArrowUpward, "Pasta de cima") }
         else Spacer(Modifier.width(12.dp))

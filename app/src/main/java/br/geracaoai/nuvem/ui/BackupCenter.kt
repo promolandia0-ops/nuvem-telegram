@@ -246,8 +246,8 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                                 Icon(Icons.Rounded.Folder, null, tint = Nv.Gold)
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(FileScan.relOf(path).ifBlank { path }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(if (FileScan.isRoot(path)) "Todos os arquivos do celular" else path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(if (FileScan.isRoot(path)) "Todas as pastas, menos Android e ocultas" else FileScan.relOf(path).ifBlank { path }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 IconButton({ removeFolder = path }) { Icon(Icons.Rounded.Close, "Tirar do backup") }
                             }
