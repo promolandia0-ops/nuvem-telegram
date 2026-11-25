@@ -1,7 +1,7 @@
 name: build
 on:
   push:
-    branches: [nuvem-v2]
+    branches: [nuvem-v2, ccr-f1bf92dd-we61zz]
   workflow_dispatch:
 permissions:
   contents: write
@@ -26,7 +26,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: nuvem-backup-tudo
-          name: Nuvem (backup de tudo)
+          name: Nuvem 1.8.1 (completa)
           files: out/nuvem-telegram.apk
           prerelease: true
           make_latest: false
