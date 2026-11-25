@@ -42,14 +42,23 @@ class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), 
     // ---------- API ----------
     private fun api(cmd: JSONObject): Any {
         var wait = 500L
+        var lastHttp = ""
         repeat(6) {
             val url = "https://g.api.mega.co.nz/cs?id=${seq++}" + if (sid.isNotBlank()) "&sid=$sid" else ""
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"; doOutput = true; connectTimeout = 20_000; readTimeout = 60_000
-                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Content-Type", "text/plain;charset=UTF-8")
+                setRequestProperty("User-Agent", "Nuvem/" + br.geracaoai.nuvem.BuildConfig.VERSION_NAME + " (Android)")
             }
             try {
                 conn.outputStream.use { it.write(JSONArray().put(cmd).toString().toByteArray()) }
+                val code = conn.responseCode
+                if (code !in 200..299) {
+                    val err = try { conn.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
+                    lastHttp = "HTTP $code" + (err?.trim()?.take(120)?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "")
+                    if (code in 500..599) { Thread.sleep(wait); wait = (wait * 2).coerceAtMost(8_000); return@repeat }
+                    throw MegaException(-100, "O MEGA recusou o pedido ($lastHttp).")
+                }
                 val body = conn.inputStream.bufferedReader().use { it.readText() }.trim()
                 val parsed: Any = if (body.startsWith("[")) JSONArray(body).get(0) else body.toIntOrNull() ?: body
                 if (parsed is Int && parsed == -3) { Thread.sleep(wait); wait *= 2; return@repeat } // EAGAIN
@@ -57,7 +66,7 @@ class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), 
                 return parsed
             } finally { conn.disconnect() }
         }
-        throw MegaException(-3, "O MEGA está ocupado. Tente de novo daqui a pouco.")
+        throw MegaException(-3, "O MEGA está ocupado" + (if (lastHttp.isNotBlank()) " ($lastHttp)" else "") + ". Tente de novo daqui a pouco.")
     }
 
     // ---------- Login ----------
