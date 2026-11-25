@@ -80,14 +80,15 @@ fun FilesScreen(actions: @Composable RowScope.() -> Unit, onOpenMedia: (List<Clo
             actions()
         }
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-            SegmentedButton(side == 0, { side = 0 }, SegmentedButtonDefaults.itemShape(0, 2), icon = {}) {
-                Icon(Icons.Rounded.PhoneAndroid, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("No celular")
-            }
-            SegmentedButton(side == 1, { side = 1 }, SegmentedButtonDefaults.itemShape(1, 2), icon = {}) {
-                Icon(Icons.Rounded.Cloud, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Na nuvem")
-            }
+            SegmentedButton(side == 0, { side = 0 }, SegmentedButtonDefaults.itemShape(0, 3), icon = {}) { Text("Celular", maxLines = 1) }
+            SegmentedButton(side == 1, { side = 1 }, SegmentedButtonDefaults.itemShape(1, 3), icon = {}) { Text("Nuvem", maxLines = 1) }
+            SegmentedButton(side == 2, { side = 2 }, SegmentedButtonDefaults.itemShape(2, 3), icon = {}) { Text("MEGA", maxLines = 1) }
         }
-        if (side == 0) PhoneBrowser() else CloudBrowser(onOpenMedia)
+        when (side) {
+            0 -> PhoneBrowser()
+            1 -> CloudBrowser(onOpenMedia)
+            else -> MegaPane()
+        }
     }
 }
 
@@ -226,7 +227,7 @@ private fun CloudBrowser(onOpenMedia: (List<CloudItem>, Int) -> Unit) {
     val groups = remember(list) { list.groupBy { it.folder.ifBlank { "Outros" } }.toSortedMap(String.CASE_INSENSITIVE_ORDER) }
     val folder = open
     if (folder == null) {
-        if (groups.isEmpty()) { EmptyCloud("Nada na nuvem ainda", "Escolha uma pasta em \"No celular\" e toque na nuvem."); return }
+        if (groups.isEmpty()) { EmptyCloud("Nada na nuvem ainda", "Escolha uma pasta em \"Celular\" e toque na nuvem."); return }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
             items(groups.keys.toList(), key = { "f$it" }) { name ->
                 val items = groups[name].orEmpty()

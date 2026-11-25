@@ -11,6 +11,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -207,14 +210,14 @@ fun NvNavBar(selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifi
         Tab("Álbuns", Icons.Rounded.PhotoAlbum, 2),
         Tab("Arquivos", Icons.Rounded.Folder, 3),
     )
-    androidx.compose.material3.NavigationBar(modifier, containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+    NavigationBar(modifier, containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
         tabs.forEach { tab ->
-            androidx.compose.material3.NavigationBarItem(
+            NavigationBarItem(
                 selected = selected == tab.id,
                 onClick = { onSelect(tab.id) },
                 icon = { Icon(tab.icon, tab.label) },
                 label = { Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                colors = androidx.compose.material3.NavigationBarItemDefaults.colors(
+                colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = MaterialTheme.colorScheme.primary,
                     selectedTextColor = MaterialTheme.colorScheme.primary,
                     indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),

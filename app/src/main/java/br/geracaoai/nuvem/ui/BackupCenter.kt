@@ -196,13 +196,21 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                                 s.paused -> Button({ applyPrefs(); scope.launch(Dispatchers.IO) { Backup.resume(ctx) } }, Modifier.weight(1f), enabled = configured) {
                                     Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("Retomar")
                                 }
-                                else -> Button({ applyPrefs(); Backup.runNow(ctx, true) }, Modifier.weight(1f), enabled = configured) {
+                                else -> Button({
+                                    applyPrefs(); Backup.runNow(ctx, true)
+                                    // Primeira vez: pede pra não otimizar a bateria (senão o Android mata o backup com a tela desligada).
+                                    if (!br.geracaoai.nuvem.work.BatteryGuide.ignoring(ctx) && !Prefs.raw.getBoolean("batt_asked", false)) {
+                                        Prefs.raw.edit().putBoolean("batt_asked", true).apply()
+                                        br.geracaoai.nuvem.work.BatteryGuide.openBest(ctx)
+                                    }
+                                }, Modifier.weight(1f), enabled = configured) {
                                     Icon(Icons.Rounded.CloudUpload, null); Spacer(Modifier.width(6.dp)); Text("Fazer backup agora")
                                 }
                             }
                         }
                     }
                 }
+                item(key = "batt") { SamsungBatteryCard() }
                 item(key = "fail") { FailedUploadsCard() }
                 item(key = "restq") { RestoreQueueCard() }
 
