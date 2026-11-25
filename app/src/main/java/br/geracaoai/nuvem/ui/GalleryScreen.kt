@@ -52,6 +52,32 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 private val dayFmt = SimpleDateFormat("EEE, d 'de' MMM 'de' yyyy", Locale("pt", "BR"))
+private val shortDate = SimpleDateFormat("dd/MM/yy", Locale("pt", "BR"))
+
+private fun startOfDay(t: Long): Long = Calendar.getInstance().apply {
+    timeInMillis = t; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+private fun utcDayToLocalStart(utcMidnight: Long): Long {
+    val u = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = utcMidnight }
+    return Calendar.getInstance().apply {
+        clear(); set(u.get(Calendar.YEAR), u.get(Calendar.MONTH), u.get(Calendar.DAY_OF_MONTH), 0, 0, 0)
+    }.timeInMillis
+}
+
+/** Intervalo [de, até] do período escolhido. */
+private fun periodBounds(period: Int, from: Long, to: Long): Pair<Long, Long> {
+    val now = System.currentTimeMillis()
+    val today = startOfDay(now)
+    return when (period) {
+        1 -> today to Long.MAX_VALUE
+        2 -> today - 6 * 86_400_000L to Long.MAX_VALUE
+        3 -> today - 29 * 86_400_000L to Long.MAX_VALUE
+        4 -> Calendar.getInstance().apply { timeInMillis = today; set(Calendar.DAY_OF_YEAR, 1) }.timeInMillis to Long.MAX_VALUE
+        5 -> if (from > 0) from to (if (to > 0) to else Long.MAX_VALUE) else Long.MIN_VALUE to Long.MAX_VALUE
+        else -> Long.MIN_VALUE to Long.MAX_VALUE
+    }
+}
 
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
@@ -95,11 +121,20 @@ fun GalleryScreen(
         loading = false
         selected = emptySet()
     }
-    val items = remember(all, query) {
-        if (query.isBlank()) all else {
-            val q = query.lowercase()
-            all.filter { q in it.name.lowercase() || q in dayFmt.format(Date(it.taken)).lowercase() || q in it.folder.lowercase() }
+    // Filtro de data: ordem (recentes/antigos) e período (hoje, 7 dias, 30 dias, este ano, datas escolhidas).
+    var oldestFirst by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var period by androidx.compose.runtime.saveable.rememberSaveable { mutableIntStateOf(0) } // 0 tudo,1 hoje,2 7d,3 30d,4 ano,5 escolhido
+    var rangeFrom by androidx.compose.runtime.saveable.rememberSaveable { mutableLongStateOf(0L) }
+    var rangeTo by androidx.compose.runtime.saveable.rememberSaveable { mutableLongStateOf(0L) }
+    var pickRange by remember { mutableStateOf(false) }
+    val items = remember(all, query, oldestFirst, period, rangeFrom, rangeTo) {
+        val q = query.lowercase()
+        val (from, to) = periodBounds(period, rangeFrom, rangeTo)
+        val f = all.filter { ci ->
+            (query.isBlank() || q in ci.name.lowercase() || q in dayFmt.format(Date(ci.taken)).lowercase() || q in ci.folder.lowercase()) &&
+                ci.taken in from..to
         }
+        if (oldestFirst) f.sortedWith(compareBy<CloudItem> { it.taken }.thenBy { it.msgId }) else f.sortedWith(compareByDescending<CloudItem> { it.taken }.thenByDescending { it.msgId })
     }
     val albums = remember(items) { DiscoverLogic.groupAlbums(items).map { it.name to it } }
     val daySections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
@@ -141,6 +176,27 @@ fun GalleryScreen(
                 singleLine = true, shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White.copy(0.06f), focusedContainerColor = Color.White.copy(0.08f)))
         }
+        if (!folderGrid) {
+            androidx.compose.foundation.lazy.LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            ) {
+                item {
+                    FilterChip(true, { oldestFirst = !oldestFirst }, { Text(if (oldestFirst) "Mais antigos" else "Recentes") },
+                        leadingIcon = { Icon(if (oldestFirst) Icons.Rounded.ArrowUpward else Icons.Rounded.ArrowDownward, null, Modifier.size(16.dp)) })
+                }
+                val names = listOf("Tudo", "Hoje", "7 dias", "30 dias", "Este ano")
+                names.forEachIndexed { i, n -> item { FilterChip(period == i, { period = i }, { Text(n) }) } }
+                item {
+                    FilterChip(period == 5, { pickRange = true }, {
+                        Text(if (period == 5 && rangeFrom > 0) "${shortDate.format(Date(rangeFrom))} – ${shortDate.format(Date(rangeTo))}" else "Escolher datas")
+                    }, leadingIcon = { Icon(Icons.Rounded.DateRange, null, Modifier.size(16.dp)) })
+                }
+            }
+            if (period != 0 || oldestFirst) Text(
+                "${items.size} ${if (items.size == 1) "item" else "itens"}" + (if (period != 0) " no período" else ""),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 18.dp))
+        }
         LazyVerticalGrid(
             GridCells.Adaptive(if (folderGrid) 158.dp else 96.dp),
             Modifier.weight(1f),
@@ -152,7 +208,9 @@ fun GalleryScreen(
                 items(8, key = { "sk$it" }) { ShimmerBlock(Modifier.aspectRatio(1f)) }
             } else if (items.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    EmptyCloud(if (query.isBlank()) "Nada na nuvem ainda" else "Nada encontrado", if (query.isBlank()) "Toque na nuvem lá em cima para ligar o backup." else "Tente outro termo de busca.")
+                    EmptyCloud(
+                        when { period != 0 -> "Nada nesse período"; query.isBlank() -> "Nada na nuvem ainda"; else -> "Nada encontrado" },
+                        when { period != 0 -> "Escolha outro período ou toque em Tudo."; query.isBlank() -> "Toque na nuvem lá em cima para ligar o backup."; else -> "Tente outro termo de busca." })
                 }
             } else if (folderGrid) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "free") { FreeUpEntry(onBrowseFolder) }
@@ -200,6 +258,23 @@ fun GalleryScreen(
                 }) { Icon(Icons.Rounded.Download, null, tint = Color.White); Spacer(Modifier.width(6.dp)); Text("Restaurar", color = Color.White) }
                 TextButton({ confirmDel = true }) { Icon(Icons.Rounded.DeleteOutline, null, tint = Nv.Rose); Spacer(Modifier.width(6.dp)); Text("Apagar", color = Nv.Rose) }
             }
+        }
+    }
+    if (pickRange) {
+        val st = rememberDateRangePickerState(
+            initialSelectedStartDateMillis = rangeFrom.takeIf { it > 0 }, initialSelectedEndDateMillis = rangeTo.takeIf { it > 0 })
+        DatePickerDialog(
+            onDismissRequest = { pickRange = false },
+            confirmButton = { TextButton(enabled = st.selectedStartDateMillis != null, onClick = {
+                val a = st.selectedStartDateMillis ?: return@TextButton
+                val b = st.selectedEndDateMillis ?: a
+                // O calendário devolve meia-noite UTC; ajusta para o dia inteiro no fuso do celular.
+                rangeFrom = utcDayToLocalStart(a); rangeTo = utcDayToLocalStart(b) + 86_400_000L - 1
+                period = 5; pickRange = false
+            }) { Text("Filtrar") } },
+            dismissButton = { TextButton({ pickRange = false; if (period == 5) period = 0 }) { Text("Limpar") } },
+        ) {
+            DateRangePicker(st, Modifier.heightIn(max = 520.dp), title = { Text("Escolha o período", Modifier.padding(start = 24.dp, top = 16.dp)) })
         }
     }
     val alb = pendingRestore
