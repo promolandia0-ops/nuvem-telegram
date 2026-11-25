@@ -15,7 +15,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: chmod +x gradlew
-      - run: ./gradlew assembleDebug -PvcRun=${{ github.run_number }} --stacktrace --no-daemon
+      - run: ./gradlew assembleDebug -PvcRun=${{ github.run_number }} --no-daemon
       - run: |
           mkdir -p out
           cp app/build/outputs/apk/debug/app-debug.apk out/nuvem-telegram.apk

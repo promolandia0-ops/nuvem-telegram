@@ -346,7 +346,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             lastPush = now; lastKey = key
             setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct,
                 "bytesDone" to lv.bytesDone, "bytesTotal" to bytesTotal, "phase" to phase))
-            val extra = if (lv.speed > 0) " • ${fmtSpeed(lv.speed)}" + (if (lv.etaSec > 0) " • faltam ${fmtEta(lv.etaSec)}" else "") else ""
+            val extra = if (lv.speed > 0) " • ${Backup.fmtSpeed(lv.speed)}" + (if (lv.etaSec > 0) " • faltam ${Backup.fmtEta(lv.etaSec)}" else "") else ""
             val text = (if (pct in 1..99 && total > 0) "$name • arquivo $pct%" else name) + extra
             try {
                 setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(text, d, total, lv.percent), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
