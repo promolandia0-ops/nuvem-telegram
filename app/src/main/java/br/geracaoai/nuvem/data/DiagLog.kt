@@ -45,6 +45,12 @@ object DiagLog {
     }
 
     @Synchronized
+    fun clear() {
+        lines.clear(); writes = 0
+        try { file?.writeText("") } catch (_: Exception) {}
+    }
+
+    @Synchronized
     fun tail(n: Int = 300): String = lines.toList().takeLast(n).joinToString("\n")
 
     fun report(c: Context): String {
@@ -56,6 +62,13 @@ object DiagLog {
         sb.append("Aparelho: ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
             .append(", Android ").append(android.os.Build.VERSION.RELEASE).append('\n')
         sb.append("Chat do Telegram definido: ").append(Prefs.chatId != 0L).append('\n')
+        sb.append("Conexão com o Telegram: ").append(Td.connection.value).append(" | Pronto: ").append(Td.ready).append('\n')
+        try {
+            sb.append("MEGA: conectado=").append(br.geracaoai.nuvem.mega.MegaStore.loggedIn)
+                .append(" | já enviados=").append(br.geracaoai.nuvem.mega.MegaStore.done().size)
+                .append(" | pastas=").append(br.geracaoai.nuvem.mega.MegaStore.folders.ifEmpty { setOf("todas") }.joinToString(","))
+                .append(" | último erro=").append(br.geracaoai.nuvem.mega.MegaStore.lastError.ifBlank { "nenhum" }).append('\n')
+        } catch (_: Exception) {}
         sb.append("Backup de tudo: ").append(Prefs.backupAll).append(" | Automático: ").append(Prefs.autoBackup).append('\n')
         sb.append("Pausado: ").append(Prefs2.backupPaused).append(" | Trava de backup ocupada: ").append(Backup.runningInProcess()).append('\n')
         sb.append("Telegram pronto: ").append(Td.ready).append(" | Estado: ").append(Td.auth.value?.javaClass?.simpleName ?: "nenhum").append('\n')

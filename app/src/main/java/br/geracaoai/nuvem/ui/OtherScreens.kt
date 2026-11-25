@@ -103,6 +103,10 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
     var showFree by remember { mutableStateOf(false) }
     var showDiag by remember { mutableStateOf(false) }
     var showAppDiag by remember { mutableStateOf(false) }
+    var cacheAsk by remember { mutableStateOf(false) }
+    var cacheSize by remember { mutableLongStateOf(-1L) }
+    var cacheMsg by remember { mutableStateOf<String?>(null) }
+    val appCtx = androidx.compose.ui.platform.LocalContext.current
     val premium by Td.isPremium.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
         try {
@@ -158,7 +162,8 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
                 Column(Modifier.testTag(FeatureTags.SETTINGS_DUPLICADAS)) { DupCleanRow() }
                 SecretSettingsRow()
                 SettingsLine(Icons.Rounded.Info, "Diagnóstico de pastas", "Arquivos no disco, no Telegram e arquivos novos") { showDiag = true }
-                SettingsLine(Icons.Rounded.Info, "Diagnóstico do app", "Erros, travamentos e o que o backup fez. Copie e mande aqui") { showAppDiag = true }
+                SettingsLine(Icons.Rounded.Info, "Diagnóstico de erros", "Erros do backup, do Telegram e do MEGA. Copie e mande aqui") { showAppDiag = true }
+                SettingsLine(Icons.Rounded.DeleteSweep, "Limpar cache e diagnóstico", "Miniaturas, vídeos já assistidos guardados e o diário de erros. Nada da nuvem é apagado.") { cacheAsk = true }
                 SettingsLine(Icons.Rounded.Sync, "Reindexar nuvem", if (syncing) "Sincronizando…" else "Relê todo o canal (útil se apagou algo pelo Telegram)", enabled = !syncing, tag = FeatureTags.SETTINGS_REINDEXAR) {
                     syncing = true; scope.launch { try { Repo.ensureDestination(); Repo.syncIndex(full = true) } catch (e: Exception) { Prefs.lastError = e.message ?: "erro" }; syncing = false }
                 }
@@ -171,11 +176,29 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
                 SettingsLine(Icons.AutoMirrored.Rounded.Logout, "Sair / trocar de conta", "Entrar com outro número. Os arquivos continuam no Telegram.", tag = FeatureTags.SETTINGS_SAIR) { confirmOut = true }
             }
         }
-        item { Text("Nuvem 1.7.1 • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
+        item { Text("Nuvem ${br.geracaoai.nuvem.BuildConfig.VERSION_NAME} • seus arquivos ficam na sua conta do Telegram. Nada passa por servidores de terceiros. Não é possível entrar com conta Google: o Telegram sempre usa um número.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp)) }
     }
     if (showFree) FreeFoldersSheet({ showFree = false }, onOpenFolder = onBrowseFolder)
     if (showDiag) FolderDiagSheet({ showDiag = false })
     if (showAppDiag) AppDiagSheet({ showAppDiag = false })
+    if (cacheAsk) {
+        LaunchedEffect(Unit) { cacheSize = withContext(Dispatchers.IO) { try { CacheClean.size(appCtx) } catch (_: Exception) { 0L } } }
+        AlertDialog({ cacheAsk = false },
+            title = { Text("Limpar cache e diagnóstico?") },
+            text = { Text((if (cacheSize >= 0) "Vai liberar cerca de ${fmtBytes(cacheSize)}.\n\n" else "Calculando…\n\n") +
+                "Sai: miniaturas, vídeos e fotos que o app guardou ao assistir (ele baixa de novo do Telegram quando você abrir) e o diário de erros.\n" +
+                "Fica: sua conta, a nuvem inteira e o que já foi enviado.") },
+            confirmButton = { Button({
+                cacheAsk = false
+                scope.launch {
+                    val busy = withContext(Dispatchers.IO) { try { br.geracaoai.nuvem.work.Backup.isWorkRunning(appCtx) } catch (_: Exception) { false } }
+                    val n = withContext(Dispatchers.IO) { CacheClean.run(appCtx, busy = busy) }
+                    cacheMsg = "Pronto: ${fmtBytes(n)} liberados." + if (busy) "\nO backup continua normalmente." else ""
+                }
+            }) { Text("Limpar") } },
+            dismissButton = { TextButton({ cacheAsk = false }) { Text("Cancelar") } })
+    }
+    cacheMsg?.let { AlertDialog({ cacheMsg = null }, confirmButton = { TextButton({ cacheMsg = null }) { Text("OK") } }, text = { Text(it) }) }
     if (destConfirm) AlertDialog(
         { destConfirm = false },
         title = { Text("Trocar destino?") },

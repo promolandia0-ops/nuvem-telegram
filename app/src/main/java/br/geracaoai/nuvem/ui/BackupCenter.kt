@@ -121,13 +121,18 @@ fun lastRunLine(): String {
 @Composable
 fun BackupBanner(onClick: () -> Unit) {
     val s = rememberBackupState()
+    val ctx = LocalContext.current
+    val conn by br.geracaoai.nuvem.tg.Td.connection.collectAsStateWithLifecycle()
+    val reason = remember(s.queued, conn) { if (s.queued) Backup.queueReason(ctx) else "" }
     val (icon, tone, title, sub) = when {
         s.scanning -> Quad4(Icons.Rounded.ManageSearch, MaterialTheme.colorScheme.primary, "Procurando arquivos…",
             s.name.ifBlank { "Pode levar alguns minutos no celular inteiro" })
+        s.running && conn != "ready" -> Quad4(Icons.Rounded.Sync, Nv.Gold, "Reconectando ao Telegram…",
+            "O envio continua sozinho assim que conectar (${s.percent}% feito)")
         s.running -> Quad4(Icons.Rounded.CloudUpload, MaterialTheme.colorScheme.primary,
             "Enviando ${s.percent}% • ${s.done} de ${s.total}",
             (if (s.bytesTotal > 0) "${fmtBytes(s.bytesDone)} de ${fmtBytes(s.bytesTotal)} • " else "") + s.name)
-        s.queued -> Quad4(Icons.Rounded.Schedule, Nv.Gold, "Backup na fila", if (Prefs.wifiOnly) "Começa assim que tiver internet (o automático espera o Wi-Fi)" else "Começa em instantes")
+        s.queued -> Quad4(Icons.Rounded.Schedule, Nv.Gold, "Backup na fila", reason)
         s.paused -> Quad4(Icons.Rounded.PauseCircle, Nv.Gold, "Backup pausado", "Toque para retomar")
         !backupConfigured() -> Quad4(Icons.Rounded.CloudUpload, MaterialTheme.colorScheme.primary, "Backup desligado", "Toque para escolher o que salvar")
         s.error.isNotBlank() -> Quad4(Icons.Rounded.ErrorOutline, Nv.Rose, "Backup precisa de atenção", traduz(s.error))
@@ -208,7 +213,7 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                                 }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                                 val sub = when {
                                     s.running -> s.name
-                                    s.queued -> "Começa assim que tiver internet."
+                                    s.queued -> Backup.queueReason(ctx)
                                     s.error.isNotBlank() -> traduz(s.error)
                                     lastRunLine().isNotBlank() -> lastRunLine()
                                     Prefs.lastBackup > 0 -> "Último backup: " + SimpleDateFormat("dd/MM 'às' HH:mm", Locale("pt", "BR")).format(Date(Prefs.lastBackup))

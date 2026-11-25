@@ -128,6 +128,27 @@ object Backup {
         WorkManager.getInstance(c).enqueueUniqueWork(NOW, if (ignoreConstraints) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, b.build())
     }
 
+    /** Falha de rede ou de tempo (o próprio backup tenta de novo): não mostrar como erro. */
+    fun isTransient(e: Throwable): Boolean {
+        val m = (e.message ?: "") + " " + (e.cause?.message ?: "")
+        if (e is TdException && (e.code == 408 || e.code == 429 || e.code >= 500)) return true
+        if (e is java.io.IOException) return true
+        return listOf("Tempo esgotado", "timeout", "Timeout", "FLOOD", "network", "Network", "Connection", "conexão").any { it in m }
+    }
+
+    /** Por que o backup está na fila, em português de verdade. */
+    fun queueReason(c: Context): String {
+        val cm = c.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = try { cm?.getNetworkCapabilities(cm.activeNetwork) } catch (_: Exception) { null }
+        val online = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val unmetered = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true
+        return when {
+            !online -> "Sem internet agora. Começa sozinho quando voltar."
+            Prefs.wifiOnly && !unmetered -> "Esperando Wi-Fi (\"Só no Wi-Fi\" ligado). Toque e use Fazer backup agora pra ir pelos dados."
+            else -> "Recomeça em instantes."
+        }
+    }
+
     /** Comprovante da última rodada ("Concluído às 16:40: …"), mostrado na faixa e na central. */
     fun saveLastRun(text: String) {
         Prefs.raw.edit().putString("last_run_text", text).putLong("last_run_at", System.currentTimeMillis()).apply()
@@ -258,8 +279,12 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 return Result.success()
             }
             DiagLog.log("BACKUP", "erro no backup", e)
-            Prefs.lastError = e.message ?: "erro"
-            try { setProgress(workDataOf("name" to "Erro: ${Prefs.lastError}")) } catch (_: Exception) {}
+            // Rede caiu / Telegram demorou / limite de pedidos: não é defeito, continua sozinho em 2 min.
+            if (Backup.isTransient(e)) {
+                Prefs.lastError = ""
+                Backup.saveLastRun("Conexão com o Telegram caiu no meio; continua sozinho em 2 min")
+            } else Prefs.lastError = e.message ?: "erro"
+            try { setProgress(workDataOf("name" to "Erro: ${e.message}")) } catch (_: Exception) {}
             Backup.continueSoon(applicationContext, 2)
             if (e is TdException && (e.code == 429 || e.code == 408 || e.code >= 500)) Result.retry() else Result.retry()
         } finally {

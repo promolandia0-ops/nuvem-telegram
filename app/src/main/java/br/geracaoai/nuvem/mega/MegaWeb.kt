@@ -111,6 +111,7 @@ object MegaWeb {
                 MegaStore.save(c, o.optString("e"))
                 MegaStore.nodes.value = null
                 session.value = o.optString("e").ifBlank { "conectado" }
+                br.geracaoai.nuvem.data.DiagLog.log("MEGA", "sessão do site reconhecida (login feito no navegador)")
             } catch (_: Exception) {}
         }
     }
@@ -200,11 +201,12 @@ object MegaWeb {
             try { out?.close() } catch (_: Exception) {}
             out = null; file = null; progress.value = -1f
             status.value = "✓ $name recebido. Subindo pro Telegram (some do celular depois)…"
+            br.geracaoai.nuvem.data.DiagLog.log("MEGA", "download do site recebido: $name (${written / 1024} KB)")
             MegaUpload.enqueue(app, f, name)
         }
 
         @JavascriptInterface
-        fun fail(msg: String) { status.value = "O download de $name falhou: $msg"; closeQuietly(delete = true) }
+        fun fail(msg: String) { status.value = "O download de $name falhou: $msg"; br.geracaoai.nuvem.data.DiagLog.log("MEGA", "download do site falhou: $name | $msg"); closeQuietly(delete = true) }
 
         private fun closeQuietly(delete: Boolean) {
             try { out?.close() } catch (_: Exception) {}
@@ -268,6 +270,7 @@ class MegaUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
         } catch (e: java.util.concurrent.CancellationException) { throw e
         } catch (e: Exception) {
             MegaWeb.status.value = "Falhou ao subir $name: ${e.message}. Tento de novo."
+            br.geracaoai.nuvem.data.DiagLog.log("MEGA", "subir pro Telegram falhou: $name", e)
             Result.retry()
         } finally { keep.release() }
     }

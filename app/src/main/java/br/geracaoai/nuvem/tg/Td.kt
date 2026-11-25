@@ -29,6 +29,8 @@ object Td {
     val auth = MutableStateFlow<TdApi.AuthorizationState?>(null)
     val fileUpdates = MutableSharedFlow<TdApi.File>(extraBufferCapacity = 512)
     val isPremium = MutableStateFlow(false)
+    /** ready | connecting | updating | waiting_network | proxy — estado real da conexão com o Telegram. */
+    val connection = MutableStateFlow("ready")
     private val sends = ConcurrentHashMap<Long, CompletableDeferred<SendResult>>()
 
     fun filesDir(): File = app.filesDir
@@ -53,6 +55,16 @@ object Td {
             is TdApi.UpdateFile -> { fileUpdates.tryEmit(o.file); TgStream.update(o.file) }
             is TdApi.UpdateMessageSendSucceeded -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(o.message, null))
             is TdApi.UpdateMessageSendFailed -> sends.getOrPut(o.oldMessageId) { CompletableDeferred() }.complete(SendResult(null, o.error))
+            is TdApi.UpdateConnectionState -> {
+                val v = when (o.state) {
+                    is TdApi.ConnectionStateWaitingForNetwork -> "waiting_network"
+                    is TdApi.ConnectionStateConnectingToProxy -> "proxy"
+                    is TdApi.ConnectionStateConnecting -> "connecting"
+                    is TdApi.ConnectionStateUpdating -> "updating"
+                    else -> "ready"
+                }
+                if (connection.value != v) { connection.value = v; try { br.geracaoai.nuvem.data.DiagLog.log("TG", "conexão: $v") } catch (_: Exception) {} }
+            }
             is TdApi.UpdateOption -> if (o.name == "is_premium") isPremium.value = (o.value as? TdApi.OptionValueBoolean)?.value == true
             is TdApi.UpdateDeleteMessages -> {
                 if (!o.fromCache && o.messageIds != null && o.messageIds.isNotEmpty()) {

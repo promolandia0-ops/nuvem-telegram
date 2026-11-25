@@ -62,7 +62,9 @@ class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), 
                     val challenge = conn.getHeaderField("X-Hashcash")
                     if (!challenge.isNullOrBlank()) {
                         onStatus("Verificação de segurança do MEGA… (pode levar até 1 minuto)")
+                        val t0 = System.currentTimeMillis()
                         hashcash = solveHashcash(challenge)
+                        br.geracaoai.nuvem.data.DiagLog.log("MEGA", "verificação (hashcash) resolvida em ${(System.currentTimeMillis() - t0) / 1000}s para '${cmd.optString("a")}'")
                         onStatus("")
                         return@repeat
                     }
@@ -70,13 +72,17 @@ class MegaClient(var sid: String = "", var masterKey: ByteArray = ByteArray(0), 
                 if (code !in 200..299) {
                     val err = try { conn.errorStream?.bufferedReader()?.use { it.readText() } } catch (_: Exception) { null }
                     lastHttp = "HTTP $code" + (err?.trim()?.take(120)?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: "")
+                    br.geracaoai.nuvem.data.DiagLog.log("MEGA", "pedido '${cmd.optString("a")}' recusado: $lastHttp")
                     if (code in 500..599) { Thread.sleep(wait); wait = (wait * 2).coerceAtMost(8_000); return@repeat }
                     throw MegaException(-100, "O MEGA recusou o pedido ($lastHttp).")
                 }
                 val body = conn.inputStream.bufferedReader().use { it.readText() }.trim()
                 val parsed: Any = if (body.startsWith("[")) JSONArray(body).get(0) else body.toIntOrNull() ?: body
                 if (parsed is Int && parsed == -3) { Thread.sleep(wait); wait *= 2; return@repeat } // EAGAIN
-                if (parsed is Int && parsed < 0) throw MegaException(parsed, errorText(parsed))
+                if (parsed is Int && parsed < 0) {
+                    br.geracaoai.nuvem.data.DiagLog.log("MEGA", "pedido '${cmd.optString("a")}' respondeu erro $parsed (${errorText(parsed)})")
+                    throw MegaException(parsed, errorText(parsed))
+                }
                 return parsed
             } finally { conn.disconnect() }
         }

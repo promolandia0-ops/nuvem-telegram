@@ -157,6 +157,7 @@ class MegaImportWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                     report(n, total, "Pronto: ${node.name}", 100)
                 } catch (e: MegaException) {
                     MegaStore.lastError = e.message ?: "Erro do MEGA"
+                    DiagLog.log("MEGA", "importar ${node.name}: ${e.message}")
                     if (e.code == -17) { MegaImport.later(applicationContext, 60); break }
                     if (e.code == -15) break
                     n++
@@ -164,15 +165,18 @@ class MegaImportWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 } catch (e: Exception) {
                     if (isStopped) break
                     MegaStore.lastError = "${node.name}: ${e.message ?: "falhou"}"
+                    DiagLog.log("MEGA", "importar ${node.name} falhou", e)
                     n++
                 } finally { f.delete() }
             }
             try { Repo.pushIndex(dest.id) } catch (_: Exception) {}
+            DiagLog.log("MEGA", "rodada: $sent enviados, $skippedBig grandes demais, ${todo.size} na lista")
             val summary = "MEGA: $sent arquivos novos na Nuvem" + if (skippedBig > 0) " • $skippedBig acima do limite do Telegram ficaram de fora" else ""
             return Result.success(workDataOf("summary" to summary))
         } catch (e: java.util.concurrent.CancellationException) { throw e
         } catch (e: Exception) {
             MegaStore.lastError = e.message ?: "Erro ao importar do MEGA"
+            DiagLog.log("MEGA", "importação parou", e)
             if (e is MegaException && e.code == -15) return Result.success()
             MegaImport.later(applicationContext, 5)
             return Result.success()
