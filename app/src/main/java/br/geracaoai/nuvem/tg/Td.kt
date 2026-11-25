@@ -77,7 +77,7 @@ object Td {
             useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false
             apiId = id; apiHash = hash
             systemLanguageCode = "pt-BR"; deviceModel = Build.MODEL ?: "Android"
-            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem 1.6.2"
+            systemVersion = Build.VERSION.RELEASE ?: ""; applicationVersion = "Nuvem " + br.geracaoai.nuvem.BuildConfig.VERSION_NAME
         }
         c.send(p) { r -> if (r is TdApi.Error) Prefs.lastError = r.message }
     }

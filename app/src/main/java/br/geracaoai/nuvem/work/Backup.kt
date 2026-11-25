@@ -38,10 +38,21 @@ object Backup {
     const val ACTION_PAUSE = "br.geracaoai.nuvem.BACKUP_PAUSE"
     const val ACTION_STOP = "br.geracaoai.nuvem.BACKUP_STOP"
     const val NOTIF_ID = 42
-    private val gate = AtomicBoolean(false)
-    fun tryStart(): Boolean = gate.compareAndSet(false, true)
-    fun end() { gate.set(false) }
-    fun runningInProcess() = gate.get()
+    /** Trava com dono: só quem pegou solta. Evita dois backups enviando os mesmos arquivos juntos. */
+    private val gate = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    @Volatile private var gateBeat = 0L
+    fun tryStart(owner: String): Boolean = gate.compareAndSet(null, owner).also { if (it) gateBeat = SystemClock.elapsedRealtime() }
+    fun end(owner: String) { gate.compareAndSet(owner, null) }
+    fun beat() { gateBeat = SystemClock.elapsedRealtime() }
+    fun runningInProcess() = gate.get() != null
+    /** Trava presa: ninguém deu sinal de vida há 3 min e o WorkManager não tem backup rodando. */
+    private fun gateStale(c: Context): Boolean =
+        gate.get() != null && SystemClock.elapsedRealtime() - gateBeat > 3 * 60_000L && !workManagerRunning(c)
+
+    private fun workManagerRunning(c: Context): Boolean = try {
+        val wm = WorkManager.getInstance(c)
+        uniqueNames().flatMap { wm.getWorkInfosForUniqueWork(it).get(2, TimeUnit.SECONDS) }.any { it.state == WorkInfo.State.RUNNING }
+    } catch (_: Exception) { false }
 
     fun ensureChannel(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java) ?: return
@@ -58,14 +69,7 @@ object Backup {
 
     private fun uniqueNames() = listOf(NOW, PERIODIC, CONTINUE)
 
-    fun isWorkRunning(c: Context): Boolean {
-        if (runningInProcess()) return true
-        return try {
-            val wm = WorkManager.getInstance(c)
-            uniqueNames().flatMap { wm.getWorkInfosForUniqueWork(it).get(2, TimeUnit.SECONDS) }
-                .any { it.state == WorkInfo.State.RUNNING }
-        } catch (_: Exception) { false }
-    }
+    fun isWorkRunning(c: Context): Boolean = (runningInProcess() && !gateStale(c)) || workManagerRunning(c)
 
     fun schedule(c: Context) {
         val wm = WorkManager.getInstance(c)
@@ -100,14 +104,23 @@ object Backup {
 
     fun runNow(c: Context, ignoreConstraints: Boolean = false, expedited: Boolean = false) {
         DiagLog.log("BACKUP", "pedido de início: manual=$ignoreConstraints pausado=${Prefs2.backupPaused} trava=${gate.get()}")
-        // Toque do usuário (Iniciar/Sim/Retomar) tira a pausa e sempre começa.
+        // Toque do usuário (Iniciar/Sim/Retomar) tira a pausa.
         if (ignoreConstraints) {
             Prefs2.backupPaused = false
-            gate.set(false) // trava presa de um run antigo: o toque do usuário solta e recomeça
+            if (gateStale(c)) gate.set(null) // só solta trava de um run que morreu
         }
         if (Prefs2.backupPaused) return
-        // Automático: não empilha se já roda. Manual (Iniciar): sempre começa, trocando um run preso.
-        if (!ignoreConstraints && isWorkRunning(c)) return
+        // Já tem backup rodando de verdade: não abre outro por cima (manual ou automático).
+        if (isWorkRunning(c)) {
+            DiagLog.log("BACKUP", "já está rodando; não abre outro")
+            // Toque logo depois de Pausar: o antigo ainda está fechando. Garante que continua em 1 min.
+            if (ignoreConstraints) {
+                val follow = OneTimeWorkRequestBuilder<BackupWorker>().setInitialDelay(1, TimeUnit.MINUTES)
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
+                WorkManager.getInstance(c).enqueueUniqueWork(CONTINUE, ExistingWorkPolicy.KEEP, follow)
+            }
+            return
+        }
         WorkManager.getInstance(c).cancelUniqueWork(CONTINUE)
         val b = OneTimeWorkRequestBuilder<BackupWorker>().setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
         b.setConstraints(if (ignoreConstraints) Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build() else constraints())
@@ -208,7 +221,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             DiagLog.log("BACKUP", "não começou: Telegram não ficou pronto, nova tentativa")
             keep.release(); Backup.continueSoon(applicationContext, 2); return Result.retry()
         }
-        if (!Backup.tryStart()) {
+        if (!Backup.tryStart(id.toString())) {
             Prefs.lastError = "Outro backup ainda está terminando. Começa logo em seguida."
             DiagLog.log("BACKUP", "não começou: trava ocupada, reagendando")
             keep.release(); Backup.continueSoon(applicationContext, 1); return Result.success()
@@ -237,13 +250,14 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             if (e is TdException && (e.code == 429 || e.code == 408 || e.code >= 500)) Result.retry() else Result.retry()
         } finally {
             keep.release()
-            Backup.end()
+            Backup.end(id.toString())
         }
     }
 
     private suspend fun runBackup(): Result {
         Prefs.lastError = ""
         fun report(d: Int, total: Int, name: String, pct: Int) {
+            Backup.beat()
             setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct))
             try {
                 setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
