@@ -1,5 +1,6 @@
 package br.geracaoai.nuvem.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,11 +27,50 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Aba MEGA: entrar com e-mail e senha, trazer tudo para a Nuvem e depois tirar do MEGA. */
+/**
+ * Aba MEGA como navegador: o site do MEGA aqui dentro. Você entra, baixa o que quiser
+ * e o app salva em Download/MEGA; depois sobe sozinho pra Nuvem.
+ */
 @Composable
 fun MegaPane() {
-    var logged by remember { mutableStateOf(MegaStore.loggedIn) }
-    if (!logged) MegaLogin { logged = true } else MegaAccount { logged = false }
+    val ctx = LocalContext.current
+    val status by MegaWeb.status.collectAsStateWithLifecycle()
+    val prog by MegaWeb.progress.collectAsStateWithLifecycle()
+    val saved by MegaWeb.savedCount.collectAsStateWithLifecycle()
+    val loading by MegaWeb.loading.collectAsStateWithLifecycle()
+    var help by remember { mutableStateOf(false) }
+    val canBack by MegaWeb.canBack.collectAsStateWithLifecycle()
+    androidx.activity.compose.BackHandler(canBack) { MegaWeb.goBack() }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton({ MegaWeb.goBack() }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
+            IconButton({ MegaWeb.home() }) { Icon(Icons.Rounded.Home, "Início do MEGA") }
+            IconButton({ MegaWeb.reload() }) { Icon(Icons.Rounded.Refresh, "Recarregar") }
+            Text(if (saved > 0) "$saved salvos em Download/MEGA" else "mega.nz", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            IconButton({ help = true }) { Icon(Icons.Rounded.HelpOutline, "Como funciona") }
+        }
+        if (loading in 1..99) LinearProgressIndicator({ loading / 100f }, Modifier.fillMaxWidth().height(2.dp))
+        if (status.isNotBlank()) {
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(status, style = MaterialTheme.typography.bodySmall)
+                if (prog >= 0f) LinearProgressIndicator({ prog }, Modifier.fillMaxWidth().padding(top = 6.dp).clip(CircleShape))
+            }
+        }
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { MegaWeb.obtain(it) },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+        )
+    }
+    if (help) AlertDialog({ help = false },
+        title = { Text("Como trazer do MEGA") },
+        text = { Text("1. Entre na sua conta do MEGA aqui (é o próprio site deles).\n" +
+            "2. Abra a pasta ou o arquivo e toque em Baixar (pode ser uma pasta inteira ou vários arquivos).\n" +
+            "3. O app salva em Download/MEGA e mostra o progresso aqui em cima. Fique nesta tela até terminar.\n" +
+            "4. Depois de salvo, sobe sozinho pra sua Nuvem do Telegram (acompanhe na faixa de backup).\n" +
+            "5. Quando estiver na Nuvem, apague no próprio MEGA e, se quiser, libere o espaço do celular.\n\n" +
+            "Conta grátis do MEGA tem limite de download por algumas horas.") },
+        confirmButton = { TextButton({ help = false }) { Text("Entendi") } })
 }
 
 @Composable
