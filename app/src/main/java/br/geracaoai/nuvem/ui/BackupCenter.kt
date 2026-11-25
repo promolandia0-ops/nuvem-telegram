@@ -70,6 +70,12 @@ fun rememberBackupState(): BackupUiState {
     LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }
     val paused = remember(tick, now, per, cont) { Prefs2.backupPaused }
     val error = remember(tick, now, per, cont) { Prefs.lastError }
+    val lv by Backup.live.collectAsStateWithLifecycle()
+    // Ao vivo (mesmo processo do backup): número certo na hora, igual à notificação.
+    lv?.let { l ->
+        if (!paused) return BackupUiState(true, false, l.done, l.total, l.name, l.filePct, if (isCancelMessage(error)) "" else error,
+            l.bytesDone, l.bytesTotal, l.phase, false)
+    }
     val w = if (paused) null else (now + per + cont).firstOrNull { it.state == WorkInfo.State.RUNNING }
     val queued = !paused && w == null && (now + cont).any { it.state == WorkInfo.State.ENQUEUED }
     val p = w?.progress

@@ -128,6 +128,17 @@ object Backup {
         WorkManager.getInstance(c).enqueueUniqueWork(NOW, if (ignoreConstraints) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, b.build())
     }
 
+    /** Progresso ao vivo (memória): a tela e a notificação leem daqui, sem atraso. */
+    data class Live(val done: Int, val total: Int, val name: String, val filePct: Int, val bytesDone: Long, val bytesTotal: Long, val phase: String) {
+        val fraction: Float get() = when {
+            bytesTotal > 0 -> (bytesDone.toDouble() / bytesTotal).toFloat().coerceIn(0f, 1f)
+            total > 0 -> (done.toFloat() / total).coerceIn(0f, 1f)
+            else -> 0f
+        }
+        val percent: Int get() = (fraction * 100).toInt()
+    }
+    val live = kotlinx.coroutines.flow.MutableStateFlow<Live?>(null)
+
     /** Falha de rede ou de tempo (o próprio backup tenta de novo): não mostrar como erro. */
     fun isTransient(e: Throwable): Boolean {
         val m = (e.message ?: "") + " " + (e.cause?.message ?: "")
@@ -192,7 +203,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     }
 
     private fun notif(text: String, done: Int, total: Int, pct: Int): Notification {
-        val title = if (total > 0) "Backup no Telegram • $done de $total" else "Backup no Telegram"
+        val title = if (total > 0) "Backup • $pct% • $done de $total" else "Backup no Telegram"
         return NotificationCompat.Builder(applicationContext, Backup.CHANNEL).setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title).setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
@@ -289,6 +300,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             if (e is TdException && (e.code == 429 || e.code == 408 || e.code >= 500)) Result.retry() else Result.retry()
         } finally {
             keep.release()
+            Backup.live.value = null
             Backup.end(id.toString())
         }
     }
@@ -296,13 +308,22 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     private suspend fun runBackup(): Result {
         Prefs.lastError = ""
         var bytesDone = 0L; var bytesTotal = 0L; var phase = "prep"
+        var partial = 0L; var lastPush = 0L; var lastKey = ""
         val fileKeysAtStart = FileScan.keys(); val mediaAtStart = Prefs.folders + Prefs.secretFolders; val allAtStart = Prefs.backupAll
+        // [pct] = % do arquivo atual. A tela lê o ao vivo na hora; banco e notificação no máximo 1x por segundo.
         fun report(d: Int, total: Int, name: String, pct: Int) {
             Backup.beat()
+            val lv = Backup.Live(d, total, name, pct, (bytesDone + partial).let { if (bytesTotal > 0) it.coerceAtMost(bytesTotal) else it }, bytesTotal, phase)
+            Backup.live.value = lv
+            val now = SystemClock.elapsedRealtime()
+            val key = "$phase|$d|$total"
+            if (now - lastPush < 1000 && !(key != lastKey && now - lastPush >= 250)) return
+            lastPush = now; lastKey = key
             setProgressAsync(workDataOf("done" to d, "total" to total, "name" to name, "pct" to pct,
-                "bytesDone" to bytesDone, "bytesTotal" to bytesTotal, "phase" to phase))
+                "bytesDone" to lv.bytesDone, "bytesTotal" to bytesTotal, "phase" to phase))
+            val text = if (pct in 1..99 && total > 0) "$name • arquivo $pct%" else name
             try {
-                setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(name, d, total, pct), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+                setForegroundAsync(ForegroundInfo(Backup.NOTIF_ID, notif(text, d, total, lv.percent), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
             } catch (_: Exception) {}
         }
         if (!Td.ready) { Td.init(applicationContext); if (!Td.awaitReady()) return Result.retry() }
@@ -451,6 +472,8 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                                     val pct = (p * 100).toInt()
                                     if (pct != last) {
                                         last = pct
+                                        // bytes do grupo já enviados + parte do arquivo atual: a barra anda junto com o upload
+                                        partial = chunk.take(i).sumOf { it.first.size } + (chunk[i].first.size * p.coerceIn(0f, 1f)).toLong()
                                         report(done + i, total, "$album • ${folderDone + i} de $folderTotal • ${chunk[i].first.name}", pct)
                                     }
                                 }, chat, topicId, album)
@@ -486,6 +509,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                             done++; folderDone++; bytesDone += item.size
                             Checkpoint.mark(album, done, total, Checkpoint.itemKey(item.path, item.size, item.mtime), runStarted)
                         }
+                        partial = 0L
                         report(done, total, "$album • $folderDone de $folderTotal • ${chunk.last().first.name}", 100)
                     }
                     return true
