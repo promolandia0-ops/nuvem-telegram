@@ -1142,6 +1142,29 @@ object Repo {
 
     fun originalItem(ci: CloudItem): CloudItem? = if (ci.hash.isBlank()) null else Db.originalByHash(ci.chatId, ci.hash)
 
+    /**
+     * Foto pra ver na tela, o mais rápido possível: o arquivo ainda no celular; senão a foto do próprio
+     * item (a versão de tela do Telegram, leve), com prioridade máxima; o original pesado só se não houver outra.
+     */
+    suspend fun viewPath(ci: CloudItem): String? = withContext(Dispatchers.IO) {
+        if (ci.path.isNotBlank() && File(ci.path).let { it.isFile && it.canRead() }) return@withContext ci.path
+        listOfNotNull(ci, originalItem(ci)).forEach { item ->
+            try {
+                val f = fileOf(message(item)) ?: return@forEach
+                f.local?.path?.takeIf { f.local.isDownloadingCompleted && File(it).exists() }?.let { return@withContext it }
+                val p = Td.send(TdApi.DownloadFile(f.id, 32, 0, 0, true), 180_000).local.path
+                if (p.isNotBlank() && File(p).exists()) return@withContext p
+            } catch (_: Exception) {}
+        }
+        null
+    }
+
+    /** Já começa a baixar as fotos vizinhas (deslizar pro lado abre na hora). */
+    suspend fun prefetchView(ci: CloudItem) = withContext(Dispatchers.IO) {
+        if (ci.isVideo || (ci.path.isNotBlank() && File(ci.path).isFile)) return@withContext
+        try { fileOf(message(ci))?.let { if (it.local?.isDownloadingCompleted != true) Td.send(TdApi.DownloadFile(it.id, 16, 0, 0, false), 15_000) } } catch (_: Exception) {}
+    }
+
     suspend fun fullPath(ci: CloudItem): String? {
         val src = originalItem(ci) ?: ci
         val f = fileOf(message(src)) ?: return null

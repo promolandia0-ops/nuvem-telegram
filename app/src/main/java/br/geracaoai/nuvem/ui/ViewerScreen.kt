@@ -5,7 +5,11 @@ import br.geracaoai.nuvem.work.Restore
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -55,10 +59,15 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
         } else {
         androidx.compose.runtime.LaunchedEffect(idx) { if (items.getOrNull(idx)?.isVideo != true && pager.currentPage != idx) try { pager.scrollToPage(idx) } catch (_: Exception) {} }
         androidx.compose.runtime.LaunchedEffect(pager.currentPage) { if (items.getOrNull(pager.currentPage)?.isVideo != true) idx = pager.currentPage }
-        HorizontalPager(pager, Modifier.fillMaxSize(), key = { items[it].msgId }) { p ->
+        // fotos vizinhas já vão baixando
+        androidx.compose.runtime.LaunchedEffect(pager.currentPage) {
+            for (d in listOf(1, -1, 2)) items.getOrNull(pager.currentPage + d)?.let { launch { Repo.prefetchView(it) } }
+        }
+        HorizontalPager(pager, Modifier.fillMaxSize(), key = { items[it].msgId }, beyondViewportPageCount = 1) { p ->
             val ci = items[p]
-            Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { chrome = !chrome }, contentAlignment = Alignment.Center) {
-                if (ci.isVideo) Box(Modifier.fillMaxSize()) else PhotoPage(ci)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (ci.isVideo) Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { chrome = !chrome })
+                else PhotoPage(ci) { chrome = !chrome }
             }
         }
         }
@@ -96,17 +105,35 @@ private fun ViewerAction(icon: androidx.compose.ui.graphics.vector.ImageVector, 
 }
 
 @Composable
-private fun PhotoPage(ci: CloudItem) {
-    val thumb by produceState<String?>(null, ci.msgId) { value = Repo.thumbPath(ci) }
-    val full by produceState<String?>(null, ci.msgId) { value = try { Repo.fullPath(ci) } catch (_: Exception) { null } }
+private fun PhotoPage(ci: CloudItem, onTap: () -> Unit) {
+    val thumb by produceState<String?>(null, ci.msgId) { value = Repo.thumbDisk(ci).takeIf { it.length() > 0 }?.path ?: Repo.thumbPath(ci) }
+    val full by produceState<String?>(null, ci.msgId) { value = try { Repo.viewPath(ci) } catch (_: Exception) { null } }
     var scale by remember { mutableFloatStateOf(1f) }
     var off by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
-    Box(Modifier.fillMaxSize().pointerInput(Unit) {
-        detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 6f); off = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else off + pan }
-    }, contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxSize()
+        .pointerInput(Unit) {
+            detectTapGestures(onTap = { onTap() }, onDoubleTap = {
+                if (scale > 1f) { scale = 1f; off = androidx.compose.ui.geometry.Offset.Zero } else scale = 2.5f
+            })
+        }
+        .pointerInput(Unit) {
+            // Zoom com dois dedos; arrastar só move a foto quando ela está ampliada.
+            // Com a foto normal, o arrastar com um dedo fica livre pra passar pra próxima.
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                do {
+                    val ev = awaitPointerEvent()
+                    if (ev.changes.size > 1 || scale > 1f) {
+                        scale = (scale * ev.calculateZoom()).coerceIn(1f, 6f)
+                        off = if (scale <= 1f) androidx.compose.ui.geometry.Offset.Zero else off + ev.calculatePan()
+                        ev.changes.forEach { it.consume() }
+                    }
+                } while (ev.changes.any { it.pressed })
+            }
+        }, contentAlignment = Alignment.Center) {
         val m = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = off.x, translationY = off.y)
-        thumb?.let { AsyncImage(File(it), null, m, contentScale = ContentScale.Fit) }
-        Crossfade(full, label = "full") { f -> if (f != null) AsyncImage(File(f), ci.name, m, contentScale = ContentScale.Fit) }
+        if (full == null) thumb?.let { AsyncImage(File(it), null, m, contentScale = ContentScale.Fit) }
+        full?.let { f -> AsyncImage(File(f), ci.name, m, contentScale = ContentScale.Fit) }
         if (full == null) CircularProgressIndicator(Modifier.size(32.dp), color = Color.White)
     }
 }
