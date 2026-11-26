@@ -63,6 +63,14 @@ object FailStore {
 
     fun clear() { replace(emptyList()) }
 
+    /** Tira da lista o que não existe mais no celular (apagado, movido ou na lixeira). Devolve quantos saíram. */
+    fun pruneMissing(): Int {
+        val cur = read()
+        val keep = cur.filter { it.path.isBlank() || java.io.File(it.path).isFile }
+        if (keep.size != cur.size) replace(keep)
+        return cur.size - keep.size
+    }
+
     private fun read(): List<FailedUpload> {
         val raw = try { Prefs.raw.getString(KEY, "[]") } catch (_: Exception) { "[]" }
         return try {

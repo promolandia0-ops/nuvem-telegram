@@ -320,6 +320,7 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     private suspend fun runBackup(): Result {
         Prefs.lastError = ""
+        try { FailStore.pruneMissing().takeIf { it > 0 }?.let { DiagLog.log("BACKUP", "$it da lista Falharam não existem mais no celular; saíram da lista") } } catch (_: Exception) {}
         var bytesDone = 0L; var bytesTotal = 0L; var phase = "prep"
         var partial = 0L; var lastPush = 0L; var lastKey = ""
         // velocidade: média móvel dos bytes enviados de verdade (pula os já-na-nuvem, que contam rápido)

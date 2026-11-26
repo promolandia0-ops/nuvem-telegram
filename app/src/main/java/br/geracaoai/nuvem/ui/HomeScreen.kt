@@ -398,7 +398,14 @@ fun FailedUploadsCard() {
         }
         if (failed.size > 8) Text("+${failed.size - 8} outros", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
-        PillButton("Tentar de novo", Icons.Rounded.CloudUpload, { Backup.runNow(ctx, true) })
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            PillButton("Tentar de novo", Icons.Rounded.CloudUpload, {
+                val gone = FailStore.pruneMissing()
+                if (gone > 0) android.widget.Toast.makeText(ctx, "$gone não existem mais no celular e saíram da lista.", android.widget.Toast.LENGTH_LONG).show()
+                Backup.runNow(ctx, true)
+            })
+            TextButton({ FailStore.clear(); if (Prefs.lastError.contains("Falharam")) Prefs.lastError = "" }) { Text("Limpar lista") }
+        }
     }
 }
 

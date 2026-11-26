@@ -532,6 +532,7 @@ object Repo {
         list.forEachIndexed { idx, d ->
             onProgress(idx + 1, list.size, d.item.name)
             if (alreadyOnCloud(d.hash, d.item.size, d.item.name)) return@forEachIndexed
+            if (!File(d.item.path).isFile) { DiagLog.log("BACKUP", "saiu da fila (não existe mais): ${d.item.path}"); return@forEachIndexed }
             val folder = d.folder
             var jpeg: File? = null
             val thumb = try { thumbFor(c, d.item) } catch (_: Exception) { null }
@@ -655,6 +656,9 @@ object Repo {
         val resolved = mime.ifBlank { Meta.mimeFromName(path) }
         val kind = if (forceDocument) SendKind.DOCUMENT else Meta.sendKind(resolved, size)
         var generated: File? = null
+        var staged: File? = null
+        // Arquivo sumiu (apagado, movido ou foi pra lixeira do celular): não adianta insistir.
+        if (!File(path).isFile) throw TdException(404, GONE)
         try {
             val useThumb = thumb ?: if (kind == SendKind.VIDEO) {
                 generated = videoThumb(path, cacheDir ?: Td.cacheDir())
@@ -664,11 +668,28 @@ object Repo {
                 sendContent(buildContent(kind, path, caption, useThumb), onProgress, replyTo, meta, chatId, topicId)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
+                // O Telegram não resolve o caminho de alguns arquivos ("Can't find real file path"):
+                // sobe uma cópia temporária do mesmo arquivo.
+                if ((e.message ?: "").contains("real file path", true) && File(path).isFile) {
+                    DiagLog.log("BACKUP", "Telegram não achou o caminho; subindo cópia temporária de ${File(path).name}")
+                    staged = stageCopy(path, cacheDir ?: Td.cacheDir())
+                    return sendContent(buildContent(kind, staged.absolutePath, caption, useThumb), onProgress, replyTo, meta, chatId, topicId)
+                }
                 // Foto/vídeo com erro (ex.: IMAGE_PROCESS_FAILED) não vai como documento aqui.
                 // O backup adia o item e tenta JPEG + documento no fim da fila.
                 throw e
             }
-        } finally { generated?.delete() }
+        } finally { generated?.delete(); staged?.delete() }
+    }
+
+    const val GONE = "O arquivo não está mais no celular (apagado, movido ou na lixeira)"
+
+    /** Cópia temporária de um arquivo local (quando o Telegram não aceita o caminho original). */
+    private fun stageCopy(path: String, dir: File): File {
+        val d = File(dir, "stage").apply { mkdirs() }
+        val out = File(d, System.currentTimeMillis().toString() + "_" + File(path).name)
+        File(path).inputStream().use { i -> out.outputStream().use { i.copyTo(it, 256 * 1024) } }
+        return out
     }
 
     private fun buildContent(kind: SendKind, path: String, caption: String, thumb: File?): TdApi.InputMessageContent {
