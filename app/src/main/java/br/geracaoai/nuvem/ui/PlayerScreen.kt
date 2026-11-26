@@ -468,6 +468,7 @@ fun VideoPlayer(
                     Box {
                         IconButton({ menu = true }) { Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White) }
                         DropdownMenu(menu, { menu = false }) {
+                            DropdownMenuItem(text = { Text("Transmitir pra TV") }, onClick = { menu = false; tvDialog = true }, leadingIcon = { Icon(Icons.Rounded.Cast, null) })
                             DropdownMenuItem(text = { Text("Detalhes") }, onClick = { menu = false; info = true }, leadingIcon = { Icon(Icons.Rounded.Info, null) })
                             DropdownMenuItem(text = { Text("Restaurar") }, onClick = {
                                 menu = false
