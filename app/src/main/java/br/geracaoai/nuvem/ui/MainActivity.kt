@@ -107,6 +107,11 @@ fun MainShell(onLogout: () -> Unit) {
     val openBackup = { overlay = "backup" }
     val openSettings = { overlay = "settings" }
     val openViewer: (List<CloudItem>, Int) -> Unit = { l, i -> viewer = l to i }
+    // Atualização: confere 1x por dia ao abrir e oferece instalar com um toque.
+    var updFechado by rememberSaveable { mutableStateOf(false) }
+    val updNova by Atualizar.disponivel.collectAsState()
+    LaunchedEffect(Unit) { Atualizar.conferir() }
+    if (updNova != null && !updFechado) AtualizarDialog { updFechado = true }
     BackHandler(viewer != null) { viewer = null }
     BackHandler(viewer == null && browseFolder != null) { browseFolder = null }
     BackHandler(viewer == null && browseFolder == null && overlay != null) {

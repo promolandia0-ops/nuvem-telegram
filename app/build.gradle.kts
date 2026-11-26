@@ -4,7 +4,7 @@ val ks = Properties().apply { val f = rootProject.file("keystore/keystore.proper
 android {
   namespace = "br.geracaoai.nuvem"
   compileSdk = 35
-  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 17 + (project.findProperty("vcRun")?.toString()?.toIntOrNull() ?: 0) - 1; versionName = "1.9.0"
+  defaultConfig { applicationId = "br.geracaoai.nuvem"; minSdk = 30; targetSdk = 35; versionCode = 17 + (project.findProperty("vcRun")?.toString()?.toIntOrNull() ?: 0) - 1; versionName = "1.10.0"
     ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } }
   signingConfigs { create("ci") { storeFile = rootProject.file("ci-debug.keystore"); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android" }; create("release") { if (ks.isNotEmpty()) { storeFile = rootProject.file(ks["storeFile"] as String); storePassword = ks["storePassword"] as String; keyAlias = ks["keyAlias"] as String; keyPassword = ks["keyPassword"] as String } } }
   buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("ci") }; release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); signingConfig = signingConfigs.getByName("release") } }

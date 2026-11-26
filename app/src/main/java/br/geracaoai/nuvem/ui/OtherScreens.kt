@@ -105,6 +105,9 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
     var showAppDiag by remember { mutableStateOf(false) }
     var cacheAsk by remember { mutableStateOf(false) }
     val freeSpace = rememberFreeSpace()
+    var checandoUpd by remember { mutableStateOf(false) }
+    var mostrarUpd by remember { mutableStateOf(false) }
+    if (mostrarUpd) AtualizarDialog { mostrarUpd = false }
     var cacheSize by remember { mutableLongStateOf(-1L) }
     var cacheMsg by remember { mutableStateOf<String?>(null) }
     val appCtx = androidx.compose.ui.platform.LocalContext.current
@@ -129,6 +132,13 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
             SectionTitle("Backup e extras")
             GlassCard(padding = 8.dp) {
                 SettingsLine(Icons.Rounded.CloudUpload, "Backup", "O que vai pra nuvem, quando, pausar e retomar.", onClick = onBackup)
+                SettingsLine(Icons.Rounded.SystemUpdate, "Atualizar app", if (checandoUpd) "Conferindo…" else "Versão ${br.geracaoai.nuvem.BuildConfig.VERSION_NAME} (build ${br.geracaoai.nuvem.BuildConfig.VERSION_CODE - 16}). Toque pra ver se tem nova.") {
+                    if (!checandoUpd) { checandoUpd = true; scope.launch {
+                        val n = Atualizar.conferir(forcar = true); checandoUpd = false
+                        if (n != null) mostrarUpd = true
+                        else android.widget.Toast.makeText(appCtx, "Você já está na versão mais nova.", android.widget.Toast.LENGTH_SHORT).show()
+                    } }
+                }
                 SettingsLine(Icons.Rounded.Storage, "Espaço do celular", "O que está ocupando: apps, fotos, vídeos, sistema e os maiores arquivos.", onClick = onSpace)
                 SettingsLine(Icons.Rounded.DeleteSweep, "Excluir aplicativos", "Vários de uma vez, do maior pro menor. Continua em segundo plano.", onClick = onApps)
                 SettingsLine(Icons.Rounded.OndemandVideo, "Assistidos no Telegram", "Guarda vídeos que você assistiu no app do Telegram.", onClick = onAssistidos)
