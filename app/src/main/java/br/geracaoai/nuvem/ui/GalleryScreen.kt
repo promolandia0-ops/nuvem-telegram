@@ -388,7 +388,13 @@ private val thumbCache = Collections.synchronizedMap(object : LinkedHashMap<Long
 fun Thumb(ci: CloudItem, modifier: Modifier) {
     val ctx = LocalContext.current
     val path by produceState(thumbCache[ci.msgId], ci.msgId) {
-        if (value == null) value = withContext(Dispatchers.IO) { Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
+        // Se falhar (Telegram ainda conectando, internet caiu), tenta de novo sozinho em vez de ficar em branco.
+        var espera = 3_000L
+        var tentativas = 0
+        while (value == null && tentativas++ < 7) {
+            value = withContext(Dispatchers.IO) { Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
+            if (value == null) { kotlinx.coroutines.delay(espera); espera = (espera * 2).coerceAtMost(60_000L) }
+        }
     }
     // prévia desfocada na hora (vem salva no banco), enquanto a miniatura de verdade carrega
     val mini by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, ci.msgId) {

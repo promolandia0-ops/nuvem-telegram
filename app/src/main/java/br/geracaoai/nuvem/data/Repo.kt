@@ -1080,23 +1080,65 @@ object Repo {
     /** Miniatura guardada de vez no app (não some ao fechar nem no Limpar cache). */
     fun thumbDisk(ci: CloudItem) = File(File(Td.filesDir(), "thumbs"), "${ci.chatId}_${ci.msgId}.jpg")
 
-    suspend fun thumbPath(ci: CloudItem): String? {
+    /** Miniaturas feitas no próprio celular (arquivo original ainda aqui): rápidas, sem internet. */
+    private val localGate = kotlinx.coroutines.sync.Semaphore(3)
+
+    /**
+     * Miniatura de um item da nuvem, nesta ordem:
+     * 1) a já guardada no app; 2) feita do arquivo original, se ainda está no celular;
+     * 3) a miniatura do Telegram; 4) foto sem miniatura no Telegram (backup como arquivo): baixa a foto
+     * (até 25 MB) e reduz. Devolve null só quando não há como (ex.: vídeo sem miniatura e fora do celular).
+     */
+    suspend fun thumbPath(ci: CloudItem): String? = withContext(Dispatchers.IO) {
         val disk = thumbDisk(ci)
-        if (disk.length() > 0) return disk.path
-        return thumbGate.withPermit {
+        if (disk.length() > 0) return@withContext disk.path
+        if (ci.path.isNotBlank() && File(ci.path).isFile) {
+            localGate.withPermit { if (salvarMiniatura(File(ci.path), ci.isVideo || isVideoName(ci.name), disk)) return@withContext disk.path }
+        }
+        thumbGate.withPermit {
             try {
-                val t = thumbFileOf(message(ci)) ?: return@withPermit null
-                var p = Td.send(TdApi.DownloadFile(t.id, 8, 0, 0, true), 60_000).local.path
-                // O Telegram acha que já baixou, mas o arquivo sumiu (ex.: limpeza de cache): esquece e baixa de novo.
-                if (p.isBlank() || !File(p).exists()) {
-                    runCatching { Td.send(TdApi.DeleteFile(t.id), 10_000) }
-                    p = Td.send(TdApi.DownloadFile(t.id, 8, 0, 0, true), 60_000).local.path
+                val msg = message(ci)
+                val t = thumbFileOf(msg)
+                if (t != null) {
+                    var p = Td.send(TdApi.DownloadFile(t.id, 8, 0, 0, true), 60_000).local.path
+                    // O Telegram acha que já baixou, mas o arquivo sumiu (ex.: limpeza de cache): esquece e baixa de novo.
+                    if (p.isBlank() || !File(p).exists()) {
+                        runCatching { Td.send(TdApi.DeleteFile(t.id), 10_000) }
+                        p = Td.send(TdApi.DownloadFile(t.id, 8, 0, 0, true), 60_000).local.path
+                    }
+                    if (p.isNotBlank() && File(p).exists()) {
+                        disk.parentFile?.mkdirs(); File(p).copyTo(disk, overwrite = true); return@withPermit disk.path
+                    }
                 }
-                if (p.isBlank() || !File(p).exists()) null
-                else { disk.parentFile?.mkdirs(); File(p).copyTo(disk, overwrite = true); disk.path }
+                // Sem miniatura no Telegram: se é foto, baixa ela mesma (pequena) e faz a miniatura.
+                val f = fileOf(msg)
+                val ehFoto = ci.mime.startsWith("image/") || isImageName(ci.name) || msg.content is TdApi.MessagePhoto
+                if (f != null && ehFoto && (f.size in 1..25L * 1024 * 1024 || f.expectedSize in 1..25L * 1024 * 1024)) {
+                    val p = Td.send(TdApi.DownloadFile(f.id, 4, 0, 0, true), 120_000).local.path
+                    if (p.isNotBlank() && File(p).exists() && salvarMiniatura(File(p), false, disk)) return@withPermit disk.path
+                }
+                null
             } catch (_: Exception) { null }
         }
     }
+
+    private fun isImageName(n: String) = n.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "dng")
+    private fun isVideoName(n: String) = n.substringAfterLast('.', "").lowercase() in setOf("mp4", "mkv", "mov", "3gp", "webm", "avi", "m4v")
+
+    /** Faz uma miniatura de ~320px do arquivo e guarda em [out]. */
+    private fun salvarMiniatura(src: File, video: Boolean, out: File): Boolean = try {
+        val sz = Size(320, 320)
+        val bmp: Bitmap? = if (video) runCatching { android.media.ThumbnailUtils.createVideoThumbnail(src, sz, null) }.getOrNull()
+            else runCatching { android.media.ThumbnailUtils.createImageThumbnail(src, sz, null) }.getOrNull()
+                ?: runCatching { BitmapFactory.decodeFile(src.path, BitmapFactory.Options().apply { inSampleSize = 8 }) }.getOrNull()
+        if (bmp == null) false else {
+            out.parentFile?.mkdirs()
+            val tmp = File(out.path + ".tmp")
+            FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.JPEG, 82, it) }
+            bmp.recycle()
+            tmp.renameTo(out) && out.length() > 0
+        }
+    } catch (_: Throwable) { false }
 
     fun originalItem(ci: CloudItem): CloudItem? = if (ci.hash.isBlank()) null else Db.originalByHash(ci.chatId, ci.hash)
 
