@@ -18,6 +18,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,6 +58,52 @@ import java.util.*
 
 private val dayFmt = SimpleDateFormat("EEE, d 'de' MMM 'de' yyyy", Locale("pt", "BR"))
 private val shortDate = SimpleDateFormat("dd/MM/yy", Locale("pt", "BR"))
+private val monthFmt = SimpleDateFormat("MMM yyyy", Locale("pt", "BR"))
+
+/**
+ * Alavanca lateral: arraste pra descer/subir rápido; mostra o mês/ano de onde você está.
+ * [labels] tem um rótulo por posição da grade.
+ */
+@Composable
+fun FastScroller(state: LazyGridState, labels: List<String>, modifier: Modifier = Modifier) {
+    val scope = rememberCoroutineScope()
+    val total = state.layoutInfo.totalItemsCount
+    if (total < 2) return
+    var dragging by remember { mutableStateOf(false) }
+    var dragFrac by remember { mutableFloatStateOf(0f) }
+    val frac = if (dragging) dragFrac else (state.firstVisibleItemIndex.toFloat() / (total - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+    val active = dragging || state.isScrollInProgress
+    val fsAlpha by androidx.compose.animation.core.animateFloatAsState(if (active) 1f else 0.45f, label = "fs")
+    BoxWithConstraints(modifier.fillMaxHeight().width(56.dp).padding(vertical = 8.dp)) {
+        val thumbH = 56.dp
+        val track = maxHeight - thumbH
+        val trackPx = with(androidx.compose.ui.platform.LocalDensity.current) { track.toPx() }
+        fun jump(y: Float) {
+            dragFrac = (y / trackPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+            val idx = (dragFrac * (total - 1)).toInt()
+            scope.launch { state.scrollToItem(idx) }
+        }
+        Box(Modifier.fillMaxSize().pointerInput(total, trackPx) {
+            detectVerticalDragGestures(
+                onDragStart = { o -> dragging = true; jump(o.y - thumbH.toPx() / 2) },
+                onDragEnd = { dragging = false },
+                onDragCancel = { dragging = false },
+            ) { change, _ -> change.consume(); jump(change.position.y - thumbH.toPx() / 2) }
+        })
+        val y = track * frac
+        Box(Modifier.align(Alignment.TopEnd).offset(y = y).padding(end = 4.dp).size(width = 8.dp, height = thumbH)
+            .graphicsLayer { alpha = fsAlpha }.clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+        if (dragging) {
+            val idx = (frac * (total - 1)).toInt()
+            labels.getOrNull(idx)?.let { lbl ->
+                Box(Modifier.align(Alignment.TopEnd).offset(x = (-24).dp, y = y + 10.dp).wrapContentWidth(unbounded = true)) {
+                    Text(lbl, Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary).padding(horizontal = 12.dp, vertical = 6.dp),
+                        color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1)
+                }
+            }
+        }
+    }
+}
 
 private fun startOfDay(t: Long): Long = Calendar.getInstance().apply {
     timeInMillis = t; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -138,6 +189,13 @@ fun GalleryScreen(
     }
     val albums = remember(items) { DiscoverLogic.groupAlbums(items).map { it.name to it } }
     val daySections = remember(items) { items.groupBy { dayFmt.format(Date(it.taken)) } }
+    // Pinça: quantas colunas na grade (2 a 8), salvo no aparelho.
+    var cols by remember { mutableIntStateOf(Prefs.raw.getInt("grid_cols", 4).coerceIn(2, 8)) }
+    val gridState = rememberLazyGridState()
+    // Rótulo (mês/ano) de cada posição da grade, pro balão da alavanca lateral.
+    val scrollLabels = remember(daySections) {
+        buildList { daySections.forEach { (_, list) -> val m = monthFmt.format(Date(list.first().taken)).replaceFirstChar { it.uppercase() }; add(m); repeat(list.size) { add(m) } } }
+    }
     val selecting = selected.isNotEmpty()
     val folderGrid = showing == null && query.isBlank() && (mode == 2 || (mode == -1 && !videosOnly))
     val title = when {
@@ -197,9 +255,27 @@ fun GalleryScreen(
                 "${items.size} ${if (items.size == 1) "item" else "itens"}" + (if (period != 0) " no período" else ""),
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 18.dp))
         }
+        Box(Modifier.weight(1f)) {
         LazyVerticalGrid(
-            GridCells.Adaptive(if (folderGrid) 158.dp else 96.dp),
-            Modifier.weight(1f),
+            if (folderGrid) GridCells.Adaptive(158.dp) else GridCells.Fixed(cols),
+            Modifier.fillMaxSize().pointerInput(folderGrid) {
+                if (folderGrid) return@pointerInput
+                // Dois dedos: afastar = fotos maiores (menos colunas), juntar = menores (mais colunas). Um dedo continua rolando.
+                awaitEachGesture {
+                    var zoom = 1f
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val ev = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                        if (ev.changes.count { it.pressed } >= 2) {
+                            zoom *= ev.calculateZoom()
+                            if (zoom > 1.25f && cols > 2) { cols--; zoom = 1f; Prefs.raw.edit().putInt("grid_cols", cols).apply() }
+                            else if (zoom < 0.8f && cols < 8) { cols++; zoom = 1f; Prefs.raw.edit().putInt("grid_cols", cols).apply() }
+                            ev.changes.forEach { it.consume() }
+                        }
+                    } while (ev.changes.any { it.pressed })
+                }
+            },
+            state = gridState,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = if (selecting) 96.dp else 24.dp, top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(if (folderGrid) 10.dp else 3.dp),
             verticalArrangement = Arrangement.spacedBy(if (folderGrid) 10.dp else 3.dp)
@@ -247,6 +323,8 @@ fun GalleryScreen(
                     }
                 }
             }
+        }
+        if (!folderGrid && items.size > 40) FastScroller(gridState, scrollLabels, Modifier.align(Alignment.CenterEnd))
         }
         AnimatedVisibility(selecting, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xE6151C33)).padding(12.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
