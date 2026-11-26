@@ -86,7 +86,7 @@ fun SettingsLine(icon: androidx.compose.ui.graphics.vector.ImageVector, title: S
 }
 
 @Composable
-fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, onBackup: () -> Unit = {}, onAssistidos: () -> Unit = {}) {
+fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, onBackup: () -> Unit = {}, onAssistidos: () -> Unit = {}, onSpace: () -> Unit = {}, onApps: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val theme by Prefs.theme.collectAsStateWithLifecycle()
     var confirmOut by remember { mutableStateOf(false) }
@@ -129,6 +129,8 @@ fun SettingsScreen(onLogout: () -> Unit, onBrowseFolder: (String) -> Unit = {}, 
             SectionTitle("Backup e extras")
             GlassCard(padding = 8.dp) {
                 SettingsLine(Icons.Rounded.CloudUpload, "Backup", "O que vai pra nuvem, quando, pausar e retomar.", onClick = onBackup)
+                SettingsLine(Icons.Rounded.Storage, "Espaço do celular", "O que está ocupando: apps, fotos, vídeos, sistema e os maiores arquivos.", onClick = onSpace)
+                SettingsLine(Icons.Rounded.DeleteSweep, "Excluir aplicativos", "Vários de uma vez, do maior pro menor. Continua em segundo plano.", onClick = onApps)
                 SettingsLine(Icons.Rounded.OndemandVideo, "Assistidos no Telegram", "Guarda vídeos que você assistiu no app do Telegram.", onClick = onAssistidos)
             }
         }

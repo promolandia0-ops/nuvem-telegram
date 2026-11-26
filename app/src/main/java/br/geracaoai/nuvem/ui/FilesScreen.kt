@@ -73,7 +73,7 @@ fun openLocalFile(ctx: Context, file: File, mime: String = "") {
 /** Aba Arquivos: navegar nas pastas do celular (e mandar pasta inteira pro backup) ou ver o que está na nuvem. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FilesScreen(actions: @Composable RowScope.() -> Unit, onOpenMedia: (List<CloudItem>, Int) -> Unit, banner: @Composable () -> Unit = {}) {
+fun FilesScreen(actions: @Composable RowScope.() -> Unit, onOpenMedia: (List<CloudItem>, Int) -> Unit, banner: @Composable () -> Unit = {}, onSpace: () -> Unit = {}) {
     var side by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -81,6 +81,22 @@ fun FilesScreen(actions: @Composable RowScope.() -> Unit, onOpenMedia: (List<Clo
             actions()
         }
         banner()
+        // Barra de espaço: quanto o celular está cheio, toque pra ver o que ocupa.
+        val used = remember { try { val st = android.os.StatFs(android.os.Environment.getExternalStorageDirectory().path); val t = st.totalBytes; if (t > 0) ((t - st.availableBytes) * 100 / t).toInt() else -1 } catch (_: Exception) { -1 } }
+        if (used >= 0) Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer).clickable(onClick = onSpace).padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Storage, null, tint = if (used >= 85) Nv.Rose else MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Celular $used% cheio • ver o que ocupa", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                LinearProgressIndicator({ used / 100f }, Modifier.fillMaxWidth().padding(top = 4.dp).height(4.dp).clip(RoundedCornerShape(2.dp)),
+                    color = if (used >= 85) Nv.Rose else MaterialTheme.colorScheme.primary)
+            }
+            Icon(Icons.Rounded.ChevronRight, null)
+        }
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
             SegmentedButton(side == 0, { side = 0 }, SegmentedButtonDefaults.itemShape(0, 3), icon = {}) { Text("Celular", maxLines = 1) }
             SegmentedButton(side == 1, { side = 1 }, SegmentedButtonDefaults.itemShape(1, 3), icon = {}) { Text("Nuvem", maxLines = 1) }

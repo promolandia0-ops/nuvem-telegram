@@ -205,7 +205,7 @@ private data class Quad4(val a: ImageVector, val b: Color, val c: String, val d:
 /** Central de backup: o que está acontecendo, o que entra no backup e quando. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced: () -> Unit) {
+fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced: () -> Unit, onSpace: () -> Unit = {}) {
     BackHandler(onBack = onClose)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -321,6 +321,19 @@ fun BackupCenterScreen(onClose: () -> Unit, onAddFolder: () -> Unit, onAdvanced:
                                 }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             if (loadingFree) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Rounded.ChevronRight, null)
+                        }
+                    }
+                }
+                item(key = "space") {
+                    GlassCard(onClick = onSpace, padding = 14.dp) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Storage, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Espaço do celular", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text("Descubra o que está ocupando (apps, vídeos escondidos, arquivos grandes) e exclua apps.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(Icons.Rounded.ChevronRight, null)
                         }
                     }
                 }

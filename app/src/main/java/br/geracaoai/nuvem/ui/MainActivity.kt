@@ -125,13 +125,15 @@ fun MainShell(onLogout: () -> Unit) {
                         0 -> GalleryScreen(null, mode = 0, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
                         1 -> GalleryScreen(null, mode = 1, onBrowseFolder = { browseFolder = it }, actions = acts, banner = { BackupBanner(openBackup) }, onOpen = openViewer)
                         2 -> AlbumsTab(acts, banner = { BackupBanner(openBackup) }, onBrowseFolder = { browseFolder = it }, onOpen = openViewer)
-                        else -> FilesScreen(acts, openViewer, banner = { BackupBanner(openBackup) })
+                        else -> FilesScreen(acts, openViewer, banner = { BackupBanner(openBackup) }, onSpace = { overlay = "space" })
                     }
                 }
             }
         }
         when (overlay) {
-            "backup" -> BackupCenterScreen(onClose = { overlay = null }, onAddFolder = { overlay = null; tab = 3 }, onAdvanced = { overlay = "advanced" })
+            "backup" -> BackupCenterScreen(onClose = { overlay = null }, onAddFolder = { overlay = null; tab = 3 }, onAdvanced = { overlay = "advanced" }, onSpace = { overlay = "space" })
+            "space" -> SpaceScreen(onBack = { overlay = null }, onApps = { overlay = "apps" })
+            "apps" -> AppsScreen(onBack = { overlay = "space" })
             "advanced" -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 Column(Modifier.fillMaxSize().statusBarsPadding()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -151,7 +153,7 @@ fun MainShell(onLogout: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton({ overlay = null }) { Icon(Icons.Rounded.ArrowBack, "Voltar") }
                     }
-                    SettingsScreen(onLogout, onBrowseFolder = { browseFolder = it }, onBackup = { overlay = "backup" }, onAssistidos = { overlay = "watched" })
+                    SettingsScreen(onLogout, onBrowseFolder = { browseFolder = it }, onBackup = { overlay = "backup" }, onAssistidos = { overlay = "watched" }, onSpace = { overlay = "space" }, onApps = { overlay = "apps" })
                 }
             }
             "watched" -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

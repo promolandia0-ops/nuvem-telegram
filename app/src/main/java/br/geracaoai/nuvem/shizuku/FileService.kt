@@ -42,6 +42,21 @@ class FileService : IFileService.Stub() {
         return ArrayList(lastList.subList(from, (from + limit).coerceAtMost(lastList.size)))
     }
 
+    override fun uninstall(pkg: String): String = try {
+        if (!pkg.matches(Regex("[A-Za-z0-9_.]+"))) "Failure: nome inválido" else {
+            val p = ProcessBuilder("pm", "uninstall", pkg).redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText().trim()
+            p.waitFor(); out
+        }
+    } catch (e: Exception) { "Failure: ${e.message}" }
+
+    override fun du(path: String): Long {
+        val r = File(path); if (!r.exists()) return 0L
+        var n = 0L
+        r.walkTopDown().maxDepth(16).forEach { if (it.isFile) n += it.length() }
+        return n
+    }
+
     override fun open(path: String): ParcelFileDescriptor = ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
 
     override fun remove(path: String): Boolean = File(path).delete()
