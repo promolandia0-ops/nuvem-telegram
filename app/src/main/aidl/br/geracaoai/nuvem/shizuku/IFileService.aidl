@@ -6,4 +6,6 @@ interface IFileService {
     List<String> list(String root, long minSize) = 1;
     ParcelFileDescriptor open(String path) = 2;
     boolean remove(String path) = 3;
+    /** Busca paginada: arquivos >= minSize com extensão em exts (csv; vazio = qualquer), pulando pastas de cache/miniatura. "tamanho|mtime|caminho". */
+    List<String> scan(String root, long minSize, String exts, int offset, int limit) = 4;
 }

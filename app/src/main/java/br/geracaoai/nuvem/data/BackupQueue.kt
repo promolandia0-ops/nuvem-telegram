@@ -20,6 +20,7 @@ object BackupQueue {
     fun addBuckets(names: Collection<String>) = save(current() + names.map { "bucket:$it" })
     fun addDirs(paths: Collection<String>) = save(current() + paths.map { "dir:" + it.trimEnd('/') })
     fun addFiles(paths: Collection<String>) = save(current() + paths.map { "file:$it" })
+    fun addPrivate(keys: Collection<String>) = save(current() + keys)
     fun remove(entries: Collection<String>) = save(current() - entries.toSet())
     fun clear() = save(emptySet())
 
@@ -40,7 +41,9 @@ object BackupQueue {
     fun describe(): String {
         val c = current()
         val b = c.count { it.startsWith("bucket:") }; val d = c.count { it.startsWith("dir:") }; val f = c.count { it.startsWith("file:") }
+        val pv = c.count { it.startsWith(DeepScan.PREFIX) }
         return listOfNotNull(
+            if (pv > 0) "$pv ${if (pv == 1) "grupo protegido" else "grupos protegidos"}" else null,
             if (b > 0) "$b ${if (b == 1) "álbum" else "álbuns"}" else null,
             if (d > 0) "$d ${if (d == 1) "pasta" else "pastas"}" else null,
             if (f > 0) "$f ${if (f == 1) "arquivo" else "arquivos"}" else null,

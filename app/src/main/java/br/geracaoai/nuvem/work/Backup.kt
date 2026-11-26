@@ -387,7 +387,11 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         phase = "send"
         val folders = FolderPlan.order(selected.filter { (counts[it] ?: 0) > 0 })
         val total = folders.sumOf { counts[it] ?: 0 }
-        if (folders.isEmpty() || total == 0) {
+        // Caça profunda (Android/data via Shizuku): grupos escolhidos na mão, ou todos menos lixeiras no "backup de tudo".
+        val privQueued = BackupQueue.current().filter { it.startsWith(DeepScan.PREFIX) }.toSet()
+        val privAuto = Prefs.backupAll && Prefs.raw.getBoolean("deep_private", true)
+        val wantPriv = (privQueued.isNotEmpty() || privAuto) && DeepScan.available()
+        if ((folders.isEmpty() || total == 0) && !wantPriv) {
             Prefs.lastError = if (selected.isEmpty()) "Nenhuma pasta selecionada." else "Nenhum arquivo acessível nas pastas escolhidas. Confira a permissão de fotos e vídeos."
             Backup.saveLastRun("Não achei arquivos pra enviar. " + Prefs.lastError)
             BackupQueue.remove(queueAtStart)
@@ -582,6 +586,46 @@ class BackupWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
         if (isStopped || Prefs2.backupPaused) {
             Checkpoint.mark(Checkpoint.load()?.folder ?: "", done, total, startedAt = runStarted)
             return Result.success()
+        }
+        if (wantPriv) {
+            phase = "scan"
+            report(done, total, "Procurando fotos e vídeos protegidos (Shizuku)…", 0)
+            val groups = try { DeepScan.scan(applicationContext) } catch (_: Exception) { emptyList() }
+            val chosen = groups.filter { it.key in privQueued || (privAuto && !it.trash) }
+            val pfiles = chosen.flatMap { g -> g.files.map { g to it } }
+            if (pfiles.isNotEmpty()) {
+                phase = "send"; bytesDone = 0; bytesTotal = pfiles.sumOf { it.second.size }; partial = 0
+                var i = 0
+                for ((g, f) in pfiles) {
+                    if (isStopped || Prefs2.backupPaused) break
+                    if (nearTimeout()) { Backup.continueSoon(applicationContext, 1); break }
+                    i++
+                    if (Db.anyByNameSize(f.name, f.size) != null) { bytesDone += f.size; report(i, pfiles.size, "${g.label} • já na nuvem • ${f.name}", 100); continue }
+                    report(i - 1, pfiles.size, "${g.label} • copiando ${f.name}", 0)
+                    keep.acquire()
+                    val staged = DeepScan.stage(applicationContext, f)
+                    if (staged == null) { bytesDone += f.size; continue }
+                    try {
+                        val mime = FileScan.mimeOf(f.name)
+                        val item = LocalItem(android.net.Uri.fromFile(staged), staged.absolutePath, f.name, staged.length(), f.mtime, f.mtime, g.label, "Android/data/", mime)
+                        val h = Hash.quick(staged)
+                        if (!Repo.alreadyOnCloud(h, item.size, item.name)) {
+                            val topic = Topics.idFor(main.id, g.label)
+                            Repo.uploadFile(staged.absolutePath, item.size, Repo.captionFor(item, g.label), null, { p ->
+                                partial = (f.size * p.coerceIn(0f, 1f)).toLong()
+                                report(i - 1, pfiles.size, "${g.label} • ${f.name}", (p * 100).toInt())
+                            }, mime, applicationContext.cacheDir, meta = Repo.metaOf(item, h), chatId = main.id, topicId = topic)
+                            if (mime.startsWith("video/")) sentVideos++ else sentPhotos++
+                            sentBytes += f.size
+                        }
+                    } catch (e: CancellationException) { throw e
+                    } catch (e: Exception) {
+                        if (isCancel(e) || isStopped || Prefs2.backupPaused) throw e
+                        DiagLog.log("CAÇA", "não subiu ${f.name}", e)
+                    } finally { staged.delete(); partial = 0; bytesDone += f.size }
+                    report(i, pfiles.size, "${g.label} • ${f.name}", 100)
+                }
+            }
         }
         if (deferred.isNotEmpty()) {
             report(done, total, "Tentando de novo ${deferred.size} que falharam…", 0)

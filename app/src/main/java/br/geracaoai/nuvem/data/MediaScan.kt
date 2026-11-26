@@ -68,7 +68,8 @@ object MediaScan {
             for (f in list) {
                 if (f.isDirectory) {
                     if (isThumbDir(f.name)) continue
-                    if (d == root && f.name == "Android") continue
+                    // Android/data e obb são de apps (bloqueados); Android/media tem WhatsApp/Telegram novos.
+                    if (d == root && f.name == "Android") { File(f, "media").takeIf { it.isDirectory }?.let { stack.addLast(it) }; continue }
                     stack.addLast(f)
                 } else if (f.isFile && !isThumbFile(f.name) && BackupDiff.isMediaFile(f.name)) {
                     val p = f.absolutePath

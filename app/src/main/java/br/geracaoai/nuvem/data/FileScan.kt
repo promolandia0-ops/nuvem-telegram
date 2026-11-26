@@ -40,7 +40,8 @@ object FileScan {
         else {
             val dirs = (try { File(p).listFiles() } catch (_: Exception) { null } ?: emptyArray())
                 .filter { it.isDirectory && !it.name.startsWith(".") && !it.name.equals("Android", true) }
-            dirs.map { SMART + it.absolutePath.trimEnd('/') } + (FLAT + p.trimEnd('/'))
+            val media = File(p, "Android/media").takeIf { it.isDirectory }?.let { listOf(SMART + it.absolutePath) } ?: emptyList()
+            dirs.map { SMART + it.absolutePath.trimEnd('/') } + media + (FLAT + p.trimEnd('/'))
         }
     }.toSet()
 

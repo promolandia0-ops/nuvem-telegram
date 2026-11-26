@@ -60,6 +60,16 @@ fun LocalAlbumsScreen(actions: @Composable RowScope.() -> Unit, header: @Composa
     var sel by remember { mutableStateOf(setOf<String>()) }
     val queue by BackupQueue.items.collectAsStateWithLifecycle()
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    // Caça profunda (Shizuku): backups pré-edição, lixeira da Galeria e fotos/vídeos guardados dentro de apps.
+    val priv by DeepScan.groups.collectAsStateWithLifecycle()
+    val privScanning by DeepScan.scanning.collectAsStateWithLifecycle()
+    var shiz by remember { mutableStateOf(br.geracaoai.nuvem.shizuku.Shiz.state()) }
+    val life = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(life) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) shiz = br.geracaoai.nuvem.shizuku.Shiz.state() }
+        life.lifecycle.addObserver(obs); onDispose { life.lifecycle.removeObserver(obs) }
+    }
+    LaunchedEffect(shiz) { if (shiz == br.geracaoai.nuvem.shizuku.ShizState.READY && DeepScan.groups.value == null) DeepScan.scan(ctx) }
     LaunchedEffect(ver) {
         albums = withContext(Dispatchers.IO) {
             try {
@@ -81,11 +91,12 @@ fun LocalAlbumsScreen(actions: @Composable RowScope.() -> Unit, header: @Composa
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton({ sel = emptySet() }) { Icon(Icons.Rounded.Close, "Cancelar seleção") }
-            val bytes = albums.orEmpty().filter { it.name in sel }.sumOf { it.bytes }
+            val bytes = albums.orEmpty().filter { it.name in sel }.sumOf { it.bytes } + priv.orEmpty().filter { it.key in sel }.sumOf { it.bytes }
             Text("${sel.size} • ${fmtBytes(bytes)}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             TextButton({ sel = albums.orEmpty().map { it.name }.toSet() }) { Text("Tudo") }
             Button({
-                BackupQueue.addBuckets(sel)
+                BackupQueue.addPrivate(sel.filter { it.startsWith(DeepScan.PREFIX) })
+                BackupQueue.addBuckets(sel.filterNot { it.startsWith(DeepScan.PREFIX) })
                 val n = sel.size; sel = emptySet()
                 scope.launch {
                     val busy = withContext(Dispatchers.IO) { Backup.isWorkRunning(ctx).also { Backup.runNow(ctx, true) } }
@@ -101,6 +112,51 @@ fun LocalAlbumsScreen(actions: @Composable RowScope.() -> Unit, header: @Composa
         if (list.isEmpty()) { EmptyCloud("Nenhum álbum no celular", "Libere o acesso a fotos e vídeos."); return }
         LazyVerticalGrid(GridCells.Adaptive(158.dp), Modifier.weight(1f), contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Cartão da caça profunda
+            if (shiz != br.geracaoai.nuvem.shizuku.ShizState.READY) item(span = { GridItemSpan(maxLineSpan) }, key = "shiz") {
+                GlassCard(padding = 14.dp) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.TravelExplore, null, tint = Nv.Gold)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Achar fotos e vídeos escondidos", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text("Os backups pré-edição e a lixeira da Galeria (e vídeos guardados dentro de outros apps) ficam numa pasta protegida do Android. Só dá pra ler com o Shizuku, igual o gerenciador de arquivos.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    if (shiz == br.geracaoai.nuvem.shizuku.ShizState.NO_PERMISSION) Button({ br.geracaoai.nuvem.shizuku.Shiz.requestPermission() }, Modifier.fillMaxWidth()) { Text("Permitir no Shizuku") }
+                    else OutlinedButton({
+                        val i = ctx.packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                            ?: android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=moe.shizuku.privileged.api"))
+                        try { ctx.startActivity(i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                    }, Modifier.fillMaxWidth()) { Text("Abrir o Shizuku (toque em Iniciar lá)") }
+                }
+            } else if (privScanning && priv == null) item(span = { GridItemSpan(maxLineSpan) }, key = "shizscan") {
+                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp))
+                    Text("Caçando fotos e vídeos escondidos…", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            items(priv.orEmpty(), key = { it.key }) { g ->
+                val on = g.key in sel
+                val queued = g.key in queue
+                Column(
+                    Modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer)
+                        .then(if (on) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(16.dp)) else Modifier)
+                        .combinedClickable(
+                            onClick = { sel = if (on) sel - g.key else sel + g.key },
+                            onLongClick = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); sel = if (on) sel - g.key else sel + g.key },
+                        ).padding(8.dp)
+                ) {
+                    Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp)).background(Nv.Gold.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
+                        Icon(if (g.trash) Icons.Rounded.DeleteOutline else Icons.Rounded.Lock, null, Modifier.size(40.dp), tint = Nv.Gold)
+                        if (on) Icon(Icons.Rounded.CheckCircle, null, Modifier.align(Alignment.TopEnd).padding(6.dp).size(26.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Text(g.label, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
+                    Text("${g.files.size} itens • ${fmtBytes(g.bytes)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+                    Text(if (queued) "Na fila do backup" else if (g.trash) "Escondido • lixeira" else "Escondido • protegido", style = MaterialTheme.typography.labelSmall,
+                        color = if (queued) Nv.Gold else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
+                }
+            }
             items(list, key = { it.name }) { a ->
                 val on = a.name in sel
                 val queued = "bucket:${a.name}" in queue

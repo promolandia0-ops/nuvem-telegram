@@ -519,6 +519,7 @@ fun QueueSheet(onClose: () -> Unit) {
             LazyColumn(Modifier.heightIn(max = 480.dp)) {
                 items(q.sorted(), key = { it }) { e ->
                     val (icon, title, sub) = when {
+                        e.startsWith(DeepScan.PREFIX) -> Triple(Icons.Rounded.Lock, DeepScan.groups.value?.firstOrNull { it.key == e }?.label ?: e.removePrefix(DeepScan.PREFIX), "Escondido/protegido (Shizuku)")
                         e.startsWith("bucket:") -> Triple(Icons.Rounded.PhotoAlbum, folderLabel(e.removePrefix("bucket:")), "Álbum do celular")
                         e.startsWith("dir:") -> Triple(Icons.Rounded.Folder, e.removePrefix("dir:").substringAfterLast('/'), FileScan.relOf(e.removePrefix("dir:")).ifBlank { "Pasta" })
                         else -> Triple(Icons.Rounded.InsertDriveFile, e.removePrefix("file:").substringAfterLast('/'),
