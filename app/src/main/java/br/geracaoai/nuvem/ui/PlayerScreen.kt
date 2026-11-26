@@ -130,6 +130,7 @@ fun VideoPlayer(
     var menu by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
     var confirmDel by remember { mutableStateOf(false) }
+    var tvDialog by remember { mutableStateOf(false) }
     var hud by remember { mutableStateOf<String?>(null) }
     var speed by remember { mutableFloatStateOf(1f) }
     var aspecto by remember { mutableStateOf(ModoAspecto.AJUSTAR) }
@@ -462,6 +463,7 @@ fun VideoPlayer(
                         Text(ci.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
                         Text("${index + 1} de ${items.size}" + if (ci.folder.isNotBlank()) "  ·  ${ci.folder}" else "", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
+                    IconButton({ tvDialog = true }) { Icon(Icons.Rounded.Cast, "Transmitir pra TV", tint = Color.White) }
                     IconButton({ locked = true; chrome = false; hud = "Tela bloqueada" }) { Icon(Icons.Rounded.Lock, "Bloquear tela", tint = Color.White) }
                     Box {
                         IconButton({ menu = true }) { Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White) }
@@ -572,8 +574,12 @@ fun VideoPlayer(
                 }
             }
         }
+        // Passando na TV: controle remoto por cima do player
+        val naTv by br.geracaoai.nuvem.cast.Cast.estado.collectAsState()
+        if (naTv?.msgId == ci.msgId) br.geracaoai.nuvem.cast.CastPainel(Modifier.align(Alignment.Center).padding(20.dp).navigationBarsPadding())
     }
 
+    if (tvDialog) br.geracaoai.nuvem.cast.TransmitirDialog(ci, { tvDialog = false }) { player?.pause() }
     if (confirmDel) AlertDialog({ confirmDel = false }, icon = { Icon(Icons.Rounded.Warning, null) },
         title = { Text("Apagar da nuvem?") },
         text = { Text("“${ci.name}” será apagado permanentemente do Telegram. Se não houver cópia no celular, ele será perdido para sempre.") },

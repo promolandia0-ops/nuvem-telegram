@@ -45,6 +45,7 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
     var chrome by remember { mutableStateOf(true) }
     var confirmDel by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf(false) }
+    var tvDialog by remember { mutableStateOf(false) }
     val snack = remember { SnackbarHostState() }
     val cur = items.getOrNull(idx)
     val curIsVideo = cur?.isVideo == true
@@ -80,13 +81,23 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
                 Spacer(Modifier.weight(1f))
                 Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = .4f)).navigationBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                     ViewerAction(Icons.Rounded.Download, "Restaurar") { cur?.let { c -> Restore.enqueue(ctx, listOf(c)); scope.launch { snack.showSnackbar("Restaurar na fila") } } }
+                    ViewerAction(Icons.Rounded.Cast, "Na TV") { tvDialog = true }
                     ViewerAction(Icons.Rounded.Info, "Detalhes") { info = true }
                     ViewerAction(Icons.Rounded.DeleteOutline, "Apagar") { confirmDel = true }
                 }
             }
         }
         SnackbarHost(snack, Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp))
+        // Foto na TV: segue a foto que está na tela quando você desliza
+        val naTv by br.geracaoai.nuvem.cast.Cast.estado.collectAsState()
+        LaunchedEffect(idx) {
+            val tv = naTv?.takeIf { !it.video }?.tv ?: return@LaunchedEffect
+            val c = items.getOrNull(idx) ?: return@LaunchedEffect
+            if (!c.isVideo && naTv?.msgId != c.msgId) br.geracaoai.nuvem.cast.Cast.transmitir(ctx, tv, c)
+        }
+        if (naTv != null && !curIsVideo) br.geracaoai.nuvem.cast.CastPainel(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 64.dp, start = 12.dp, end = 12.dp), compacto = true)
     }
+    if (tvDialog && cur != null) br.geracaoai.nuvem.cast.TransmitirDialog(cur, { tvDialog = false })
     if (confirmDel && cur != null) AlertDialog({ confirmDel = false }, icon = { Icon(Icons.Rounded.Warning, null) },
         title = { Text("Apagar da nuvem?") },
         text = { Text("“${cur.name}” será apagado permanentemente do Telegram. Se não houver cópia no celular, ele será perdido para sempre.") },

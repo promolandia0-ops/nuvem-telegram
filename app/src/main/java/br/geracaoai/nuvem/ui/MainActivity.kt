@@ -22,6 +22,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import br.geracaoai.nuvem.data.CloudItem
@@ -176,5 +177,7 @@ fun MainShell(onLogout: () -> Unit) {
         AnimatedVisibility(viewer != null, enter = fadeIn() + scaleIn(initialScale = 0.92f), exit = fadeOut() + scaleOut(targetScale = 0.92f)) {
             viewer?.let { (l, i) -> ViewerScreen(l, i) { viewer = null } }
         }
+        // Passando algo na TV e o player fechado: controle pequeno no rodapé
+        if (viewer == null) br.geracaoai.nuvem.cast.CastPainel(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 88.dp), compacto = true)
     }
 }
