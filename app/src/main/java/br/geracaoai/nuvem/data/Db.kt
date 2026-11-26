@@ -59,6 +59,10 @@ object Db {
         }
     fun clearCloud(chatId: Long) { db.delete("cloud", "chat_id=?", arrayOf("$chatId")); bump() }
     fun hasMsg(chatId: Long, msgId: Long) = db.rawQuery("SELECT 1 FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { it.moveToFirst() }
+    /** Prévia minúscula (desfocada) que veio junto com a mensagem: aparece na hora, antes da miniatura. */
+    fun mini(chatId: Long, msgId: Long): ByteArray? = try {
+        db.rawQuery("SELECT mini FROM cloud WHERE chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId")).use { if (it.moveToFirst()) it.getBlob(0) else null }
+    } catch (_: Exception) { null }
     fun getCloud(chatId: Long, msgId: Long): CloudItem? = query("chat_id=? AND msg_id=?", arrayOf("$chatId", "$msgId"), includeMini = true).firstOrNull()
     /** Todos os itens do canal, inclusive originais e assistidos (para o índice). */
     fun allForIndex(chatId: Long): List<CloudItem> = query("chat_id=?", arrayOf("$chatId"))

@@ -390,7 +390,14 @@ fun Thumb(ci: CloudItem, modifier: Modifier) {
     val path by produceState(thumbCache[ci.msgId], ci.msgId) {
         if (value == null) value = withContext(Dispatchers.IO) { Repo.thumbPath(ci)?.also { thumbCache[ci.msgId] = it } }
     }
+    // prévia desfocada na hora (vem salva no banco), enquanto a miniatura de verdade carrega
+    val mini by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, ci.msgId) {
+        if (path == null) value = withContext(Dispatchers.IO) {
+            Db.mini(ci.chatId, ci.msgId)?.let { b -> runCatching { BitmapFactory.decodeByteArray(b, 0, b.size)?.asImageBitmap() }.getOrNull() }
+        }
+    }
     Box(modifier.clip(RoundedCornerShape(4.dp)).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        if (path == null) mini?.let { Image(it, null, Modifier.fillMaxSize().blur(6.dp), contentScale = ContentScale.Crop) }
         AnimatedVisibility(path != null, enter = fadeIn()) {
             val req = ImageRequest.Builder(ctx).data(path?.let { File(it) }).size(280).crossfade(true).build()
             AsyncImage(req, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

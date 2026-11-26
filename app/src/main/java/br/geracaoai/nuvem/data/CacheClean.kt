@@ -10,7 +10,8 @@ import java.io.File
  */
 object CacheClean {
     /** Pastas de arquivos baixados pelo Telegram (cache de visualização). */
-    private val TD_CACHE = listOf("videos", "documents", "photos", "thumbnails", "animations", "music", "voice", "video_notes", "stickers")
+    // Miniaturas e fotos pequenas ficam (a grade precisa delas); o Telegram é avisado pelo app quando algo some.
+    private val TD_CACHE = listOf("videos", "documents", "animations", "music", "voice", "video_notes")
 
     fun size(c: Context): Long = targets(c).sumOf { du(it) } + File(c.filesDir, "diag.log").length()
 

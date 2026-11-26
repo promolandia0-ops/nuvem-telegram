@@ -80,7 +80,12 @@ object TgStream {
                 throw TdException(408, "Demorou demais para carregar o vídeo (${PlaybackFile.rotuloProgresso(got, size)}). Confira a internet e tente de novo.")
             }
             if (loc == null || !loc.isDownloadingActive || !kicked) {
-                try { Td.send(TdApi.DownloadFile(fileId, 32, offset, 0, false), 15_000) } catch (e: Exception) { lastErr = e }
+                // Pulo pra longe do que já baixou (ex.: índice do MP4 no fim do arquivo): baixa só um pedaço
+                // (limite), pra o download principal não ficar indo e voltando entre o fim e o começo.
+                val prefixEnd = (loc?.downloadOffset ?: 0L) + (loc?.downloadedPrefixSize ?: 0L)
+                val salto = offset > prefixEnd + 1_048_576L || offset + want < (loc?.downloadOffset ?: 0L)
+                val limite = if (salto) maxOf(want, 2L * 1_048_576L) else 0L
+                try { Td.send(TdApi.DownloadFile(fileId, 32, offset, limite, false), 15_000) } catch (e: Exception) { lastErr = e }
                 kicked = true
             }
             delay(80)

@@ -18,6 +18,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.drinkless.tdlib.TdApi
 import java.io.File
@@ -1040,7 +1041,12 @@ object Repo {
         }
         val opened = file ?: throw TdException((lastErr as? TdException)?.code ?: 404,
             lastErr?.message ?: "Não achei este vídeo no Telegram. Ele pode ter sido apagado.")
-        val fresh = try { Td.send(TdApi.GetFile(opened.id), 15_000) } catch (_: Exception) { opened }
+        var fresh = try { Td.send(TdApi.GetFile(opened.id), 15_000) } catch (_: Exception) { opened }
+        // Marcado como baixado mas o arquivo sumiu (limpeza de cache): o player ficava esperando até desistir.
+        if (fresh.local?.isDownloadingCompleted == true && !File(fresh.local.path).exists()) {
+            runCatching { Td.send(TdApi.DeleteFile(fresh.id), 10_000) }
+            fresh = try { Td.send(TdApi.GetFile(fresh.id), 15_000) } catch (_: Exception) { fresh }
+        }
         if (fresh.id <= 0) throw TdException(400, "O Telegram não reconheceu o arquivo deste vídeo. Tente de novo.")
         br.geracaoai.nuvem.tg.TgStream.update(fresh)
         val size = PlaybackFile.resolvedSize(fresh.size, fresh.expectedSize, ci.size)
@@ -1068,10 +1074,29 @@ object Repo {
         }
     }
 
-    suspend fun thumbPath(ci: CloudItem): String? = try {
-        val t = thumbFileOf(message(ci))
-        t?.let { Td.send(TdApi.DownloadFile(it.id, 8, 0, 0, true), 180_000).local.path.ifBlank { null } }
-    } catch (_: Exception) { null }
+    /** No máximo 4 miniaturas pedidas ao Telegram ao mesmo tempo (antes: uma por quadradinho da grade, muitas desistiam). */
+    private val thumbGate = kotlinx.coroutines.sync.Semaphore(4)
+
+    /** Miniatura guardada de vez no app (não some ao fechar nem no Limpar cache). */
+    fun thumbDisk(ci: CloudItem) = File(File(Td.filesDir(), "thumbs"), "${ci.chatId}_${ci.msgId}.jpg")
+
+    suspend fun thumbPath(ci: CloudItem): String? {
+        val disk = thumbDisk(ci)
+        if (disk.length() > 0) return disk.path
+        return thumbGate.withPermit {
+            try {
+                val t = thumbFileOf(message(ci)) ?: return@withPermit null
+                var p = Td.send(TdApi.DownloadFile(t.id, 8, 0, 0, true), 60_000).local.path
+                // O Telegram acha que já baixou, mas o arquivo sumiu (ex.: limpeza de cache): esquece e baixa de novo.
+                if (p.isBlank() || !File(p).exists()) {
+                    runCatching { Td.send(TdApi.DeleteFile(t.id), 10_000) }
+                    p = Td.send(TdApi.DownloadFile(t.id, 8, 0, 0, true), 60_000).local.path
+                }
+                if (p.isBlank() || !File(p).exists()) null
+                else { disk.parentFile?.mkdirs(); File(p).copyTo(disk, overwrite = true); disk.path }
+            } catch (_: Exception) { null }
+        }
+    }
 
     fun originalItem(ci: CloudItem): CloudItem? = if (ci.hash.isBlank()) null else Db.originalByHash(ci.chatId, ci.hash)
 
