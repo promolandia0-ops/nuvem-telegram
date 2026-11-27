@@ -463,12 +463,19 @@ fun VideoPlayer(
                         Text(ci.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
                         Text("${index + 1} de ${items.size}" + if (ci.folder.isNotBlank()) "  ·  ${ci.folder}" else "", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
-                    IconButton({ tvDialog = true }) { Icon(Icons.Rounded.Cast, "Transmitir pra TV", tint = Color.White) }
+                    IconButton({
+                        player?.pause()
+                        scope.launch { br.geracaoai.nuvem.cast.Cast.abrirCom(ctx, ci)?.let { hud = it } }
+                    }) { Icon(Icons.Rounded.Cast, "Transmitir com…", tint = Color.White) }
                     IconButton({ locked = true; chrome = false; hud = "Tela bloqueada" }) { Icon(Icons.Rounded.Lock, "Bloquear tela", tint = Color.White) }
                     Box {
                         IconButton({ menu = true }) { Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White) }
                         DropdownMenu(menu, { menu = false }) {
-                            DropdownMenuItem(text = { Text("Transmitir pra TV") }, onClick = { menu = false; tvDialog = true }, leadingIcon = { Icon(Icons.Rounded.Cast, null) })
+                            DropdownMenuItem(text = { Text("Transmitir com… (Web Video Caster, MX…)") }, onClick = {
+                                menu = false; player?.pause()
+                                scope.launch { br.geracaoai.nuvem.cast.Cast.abrirCom(ctx, ci)?.let { hud = it } }
+                            }, leadingIcon = { Icon(Icons.Rounded.Cast, null) })
+                            DropdownMenuItem(text = { Text("Na TV direto pelo Nuvem") }, onClick = { menu = false; tvDialog = true }, leadingIcon = { Icon(Icons.Rounded.Tv, null) })
                             DropdownMenuItem(text = { Text("Detalhes") }, onClick = { menu = false; info = true }, leadingIcon = { Icon(Icons.Rounded.Info, null) })
                             DropdownMenuItem(text = { Text("Restaurar") }, onClick = {
                                 menu = false

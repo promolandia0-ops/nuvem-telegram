@@ -56,6 +56,7 @@ object Cast {
                 val path = Repo.viewPath(ci) ?: return@withContext falhou("Não deu pra baixar a foto.")
                 CastServer.Fonte(0, java.io.File(path).length(), mimeDe(ci.mime, ci.name, false), ci.name, path)
             }
+            servindo.value = null
             val url = CastServer.servir(fonte) ?: return@withContext falhou("O celular não está no Wi-Fi. Conecte no mesmo Wi-Fi da TV.")
             val r = RendererController(tv)
             r.play(url, ci.name, fonte.mime, ci.isVideo)
@@ -67,6 +68,38 @@ object Cast {
         } catch (e: Exception) {
             DiagLog.log("TV", "não transmitiu", e)
             falhou("A TV não aceitou: ${e.message ?: "erro"}. Confira se ela está ligada e no mesmo Wi-Fi.")
+        }
+    }
+
+    /** Vídeo sendo entregue pra outro app (Web Video Caster, MX Player, Controle Samsung…). */
+    val servindo = MutableStateFlow<String?>(null)
+
+    /**
+     * "Transmitir com…": abre a lista do Android com os apps de vídeo/transmissão. O Nuvem entrega o
+     * vídeo direto do Telegram por um endereço do Wi-Fi de casa, que esses apps (e a TV) conseguem abrir.
+     */
+    suspend fun abrirCom(c: Context, ci: CloudItem): String? = withContext(Dispatchers.IO) {
+        try {
+            val fonte = if (ci.isVideo) {
+                val p = Repo.playable(ci)
+                CastServer.Fonte(p.fileId, p.size, mimeDe(p.mime, ci.name, true), ci.name, if (p.complete) p.path else "")
+            } else {
+                val path = Repo.viewPath(ci) ?: return@withContext "Não deu pra baixar a foto."
+                CastServer.Fonte(0, java.io.File(path).length(), mimeDe(ci.mime, ci.name, false), ci.name, path)
+            }
+            val url = CastServer.servir(fonte, soNoCelular = true) ?: return@withContext "Não deu pra preparar o vídeo."
+            servindo.value = ci.name
+            c.startForegroundService(Intent(c, CastService::class.java))
+            val ver = Intent(Intent.ACTION_VIEW).setDataAndType(android.net.Uri.parse(url), fonte.mime)
+                .putExtra("title", ci.name).putExtra(Intent.EXTRA_TITLE, ci.name)
+            withContext(Dispatchers.Main) {
+                c.startActivity(Intent.createChooser(ver, "Transmitir com…").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+            DiagLog.log("TV", "abrir com outro app: ${ci.name}")
+            null
+        } catch (e: Exception) {
+            DiagLog.log("TV", "abrir com outro app falhou", e)
+            "Não deu pra abrir: ${e.message ?: "erro"}"
         }
     }
 
@@ -114,7 +147,7 @@ object Cast {
 
     fun parar(c: Context) {
         val r = ctrl
-        ctrl = null; poll?.cancel(); estado.value = null
+        ctrl = null; poll?.cancel(); estado.value = null; servindo.value = null
         scope.launch { runCatching { r?.stop() }; CastServer.parar() }
         c.stopService(Intent(c, CastService::class.java))
     }
@@ -149,10 +182,10 @@ class CastService : Service() {
         val alternar = PendingIntent.getService(this, 2, Intent(this, CastService::class.java).setAction(ACAO_ALTERNAR), PendingIntent.FLAG_IMMUTABLE)
         val n: Notification = NotificationCompat.Builder(this, CANAL)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Na TV: ${e?.tv?.name ?: "TV"}")
-            .setContentText(e?.titulo ?: "Transmitindo")
+            .setContentTitle(if (e != null) "Na TV: ${e.tv.name}" else "Nuvem entregando vídeo pra outro app")
+            .setContentText(e?.titulo ?: Cast.servindo.value ?: "Transmitindo")
             .setContentIntent(abrir).setOngoing(true).setSilent(true)
-            .addAction(0, "Pausar/Tocar", alternar)
+            .apply { if (e != null) addAction(0, "Pausar/Tocar", alternar) }
             .addAction(0, "Parar", parar)
             .build()
         startForeground(NOTIF, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)

@@ -46,8 +46,9 @@ object CastServer {
     }
 
     /** Começa a servir [f] e devolve o endereço que a TV deve abrir (null = sem Wi-Fi). */
-    fun servir(f: Fonte): String? {
-        val ip = ipLocal() ?: return null
+    fun servir(f: Fonte, soNoCelular: Boolean = false): String? {
+        // Fora do Wi-Fi ainda dá pra abrir em outro app do próprio celular (MX Player etc.).
+        val ip = ipLocal() ?: if (soNoCelular) "127.0.0.1" else return null
         token = UUID.randomUUID().toString()
         fonte = f
         val port = garantir().localPort

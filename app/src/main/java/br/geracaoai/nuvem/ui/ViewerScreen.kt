@@ -81,7 +81,8 @@ fun ViewerScreen(items: List<CloudItem>, start: Int, onClose: () -> Unit) {
                 Spacer(Modifier.weight(1f))
                 Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = .4f)).navigationBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                     ViewerAction(Icons.Rounded.Download, "Restaurar") { cur?.let { c -> Restore.enqueue(ctx, listOf(c)); scope.launch { snack.showSnackbar("Restaurar na fila") } } }
-                    ViewerAction(Icons.Rounded.Cast, "Na TV") { tvDialog = true }
+                    ViewerAction(Icons.Rounded.Cast, "Transmitir") { cur?.let { c -> scope.launch { br.geracaoai.nuvem.cast.Cast.abrirCom(ctx, c)?.let { snack.showSnackbar(it) } } } }
+                    ViewerAction(Icons.Rounded.Tv, "Na TV") { tvDialog = true }
                     ViewerAction(Icons.Rounded.Info, "Detalhes") { info = true }
                     ViewerAction(Icons.Rounded.DeleteOutline, "Apagar") { confirmDel = true }
                 }
